@@ -4,6 +4,7 @@ import org.apache.iotdb.isession.ITableSession;
 import org.apache.iotdb.isession.SessionDataSet;
 import org.apache.iotdb.rpc.IoTDBConnectionException;
 import org.apache.iotdb.rpc.StatementExecutionException;
+import org.apache.iotdb.session.TableSession;
 import org.apache.iotdb.session.TableSessionBuilder;
 import org.apache.iotdb.udf.api.exception.UDFException;
 import org.apache.iotdb.udf.api.relational.TableFunction;
@@ -96,6 +97,7 @@ public class ParamAlignTableFunction implements TableFunction {
 
     private String[] tableListValue;
     private final String[] tableListName;
+    // todo:高频向低频对齐
     private final String alignColumn;
     private final String[] aircraftListValue;
     private int sIndex = -1;
@@ -104,10 +106,13 @@ public class ParamAlignTableFunction implements TableFunction {
     private Map<Integer, TimeAndValue> cacheFrontValue = new HashMap<>();
 
     private boolean finish = false;
+    private boolean isInit = false;
 
     private ITableSession[] sessions = null;
     private SessionDataSet[] sessionDataSets = null;
     private SessionDataSet.DataIterator[] dataIterators = null;
+
+    private ITableSession countSession = null;
 
     ParamAlignProcessor(String tableListValue, String alignColumn, String aircraftListValue) {
       this.tableListValue = analyzeSplit(tableListValue);
@@ -124,29 +129,12 @@ public class ParamAlignTableFunction implements TableFunction {
     public void beforeStart() {
       tableListValue = getSql(tableListValue, aircraftListValue);
       try {
-        ITableSession countSession = new TableSessionBuilder()
+        countSession = new TableSessionBuilder()
                 .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
                 .username("root")
                 .password("root")
                 .database("nh")
                 .build();
-        countList = new HashMap<>();
-        long frequence = -1;
-        for (int i = 0; i < tableListValue.length; i++) {
-          SessionDataSet countSessionDataSet = countSession.executeQueryStatement("select count(*) from " + tableListName[i]);
-          RowRecord countRowRecord = countSessionDataSet.next();
-          Field field = countRowRecord.getField(0);
-          long countValue = field.getLongV();
-          countList.put(i, countValue);
-          countSessionDataSet.close();
-          // 等于的情况不需要更换索引，要按照索引顺序选定最高频
-          if (frequence < countValue) {
-            frequence = countValue;
-            sIndex = i;
-          }
-        }
-        countSession.close();
-
         for (int i = 0; i < tableListValue.length; i++) {
           sessions[i] =
                   new TableSessionBuilder()
@@ -155,17 +143,8 @@ public class ParamAlignTableFunction implements TableFunction {
                           .password("root")
                           .database("nh")
                           .build();
-          sessionDataSets[i] = sessions[i].executeQueryStatement(tableListValue[i]);
-          dataIterators[i] = sessionDataSets[i].iterator();
         }
-
-        for (int index = 0; index < tableListValue.length; index++) {
-          if (tableListName[index].equals(alignColumn)) {
-            sIndex = index;
-          }
-        }
-
-      } catch (IoTDBConnectionException | StatementExecutionException e) {
+      } catch (IoTDBConnectionException e) {
         throw new RuntimeException(e);
       }
     }
@@ -174,7 +153,36 @@ public class ParamAlignTableFunction implements TableFunction {
     @Override
     public void process(List<ColumnBuilder> columnBuilders) {
       try {
-        // 定义每次输出的行数
+        if (!isInit) {
+          countList = new HashMap<>();
+          long frequence = -1;
+          for (int i = 0; i < tableListValue.length; i++) {
+            SessionDataSet countSessionDataSet = countSession.executeQueryStatement("select count(*) from " + tableListName[i]);
+            RowRecord countRowRecord = countSessionDataSet.next();
+            Field field = countRowRecord.getField(0);
+            long countValue = field.getLongV();
+            countList.put(i, countValue);
+            countSessionDataSet.close();
+            // 等于的情况不需要更换索引，要按照索引顺序选定最高频
+            if (frequence < countValue) {
+              frequence = countValue;
+              sIndex = i;
+            }
+            sessionDataSets[i] = sessions[i].executeQueryStatement(tableListValue[i]);
+            dataIterators[i] = sessionDataSets[i].iterator();
+          }
+          for (int index = 0; index < tableListValue.length; index++) {
+            if (tableListName[index].equals(alignColumn)) {
+              sIndex = index;
+            }
+          }
+          isInit = true;
+        }
+
+
+        // todo:输出多个航班对齐结果
+
+        // todo:设置每次输出的行数
         int alignRows = 0;
 
         while (dataIterators[sIndex].next()) {
@@ -184,6 +192,8 @@ public class ParamAlignTableFunction implements TableFunction {
           columnBuilders.get(0).writeLong(dataIterators[sIndex].getLong("time"));
           columnBuilders.get(1).writeBinary(dataIterators[sIndex].getBlob("aircraft/tail"));
           columnBuilders.get(sIndex + 2).writeDouble(dataIterators[sIndex].getDouble("value"));
+/*                    columnBuilders.get(2).writeDouble(dataIterators[sIndex].getDouble("value"));
+                    columnBuilders.get(3).writeDouble(dataIterators[sIndex].getDouble("value"));*/
           for (int index = 0; index < tableListValue.length; index++) {
             if (index != sIndex) {
               dataIterators[index].next();
@@ -192,7 +202,8 @@ public class ParamAlignTableFunction implements TableFunction {
                 long sIndexTime = cacheFrontValue.get(sIndex).getTime();
                 long currentTime = dataIterators[index].getLong("time");
                 // 是否添加等于
-                while (Math.abs(sIndexTime - currentTime) > (standardTime / 2.0)) {
+                while (sIndexTime > currentTime && sIndexTime - currentTime > (standardTime / 2.0)) {
+                  System.out.println(sIndexTime - currentTime);
                   columnBuilders.get(index + 2).writeDouble(cacheFrontValue.get(index).getValue());
                   sIndexTime -= standardTime;
                 }
@@ -210,12 +221,16 @@ public class ParamAlignTableFunction implements TableFunction {
           cacheFrontValue.put(sIndex, tv);
         }
 
-        long size = columnBuilders.get(sIndex).getPositionCount();
-        for (int i = 0; i < tableListValue.length; i++) {
-          while (columnBuilders.get(i).getPositionCount() < size) {
-            columnBuilders.get(i).writeDouble(0.0);
-          }
-        }
+                long tempCount = 0;
+                for (int i = 0; i < tableListValue.length; i++) {
+                    if (i!= sIndex) {
+                        while (tempCount < 19) {
+                            columnBuilders.get(i + 2).writeDouble(0.0);
+                            tempCount++;
+                        }
+                        tempCount = 0;
+                    }
+                }
 
         finish = true;
       } catch (IoTDBConnectionException | StatementExecutionException e) {
@@ -227,6 +242,7 @@ public class ParamAlignTableFunction implements TableFunction {
     @Override
     public void beforeDestroy() {
       try {
+        countSession.close();
         for (int i = 0; i < tableListValue.length; i++) {
           sessionDataSets[i].close();
           sessions[i].close();
