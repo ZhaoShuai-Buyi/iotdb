@@ -4,7 +4,6 @@ import org.apache.iotdb.isession.ITableSession;
 import org.apache.iotdb.isession.SessionDataSet;
 import org.apache.iotdb.rpc.IoTDBConnectionException;
 import org.apache.iotdb.rpc.StatementExecutionException;
-import org.apache.iotdb.session.TableSession;
 import org.apache.iotdb.session.TableSessionBuilder;
 import org.apache.iotdb.udf.api.exception.UDFException;
 import org.apache.iotdb.udf.api.relational.TableFunction;
@@ -23,6 +22,7 @@ import org.apache.iotdb.udf.api.type.Type;
 import org.apache.tsfile.block.column.ColumnBuilder;
 import org.apache.tsfile.read.common.Field;
 import org.apache.tsfile.read.common.RowRecord;
+import org.apache.tsfile.utils.Binary;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -30,7 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class ParamAlignTableFunction implements TableFunction {
+public class InnerParamAlignTableFunction implements TableFunction {
 
   private final String TABLE_LIST = "table";
   private final String ALIGN_COLUMN = "alignColumn";
@@ -60,7 +60,7 @@ public class ParamAlignTableFunction implements TableFunction {
     schemaBuilder.addField("aircraft", Type.STRING);
     for (int i = 0; i < tableListValue.length; i++) {
       // todo: 类型是否要判断
-      schemaBuilder.addField("value" + (i + 1), Type.DOUBLE);
+      schemaBuilder.addField("value" + (i + 1), Type.FLOAT);
     }
     DescribedSchema schema = schemaBuilder.build();
 
@@ -101,12 +101,11 @@ public class ParamAlignTableFunction implements TableFunction {
     private final String alignColumn;
     private final String[] aircraftListValue;
     private int sIndex = -1;
-    private long standardTime = -1;
-    private Map<Integer, Long> countList = null;
-    private Map<Integer, TimeAndValue> cacheFrontValue = new HashMap<>();
+
+    private CacheLine[] cacheLines = null;
 
     private boolean finish = false;
-    private boolean isInit = false;
+    //private boolean isInit = false;
 
     private ITableSession[] sessions = null;
     private SessionDataSet[] sessionDataSets = null;
@@ -123,28 +122,60 @@ public class ParamAlignTableFunction implements TableFunction {
       this.sessions = new ITableSession[size];
       this.sessionDataSets = new SessionDataSet[size];
       this.dataIterators = new SessionDataSet.DataIterator[size];
+      this.cacheLines = new CacheLine[size];
     }
 
     @Override
     public void beforeStart() {
       tableListValue = getSql(tableListValue, aircraftListValue);
       try {
-        countSession = new TableSessionBuilder()
-                .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
-                .username("root")
-                .password("root")
-                .database("nh")
-                .build();
+        countSession =
+                new TableSessionBuilder()
+                        .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
+                        .username("root")
+                        .password("root")
+                        .database("b777")
+                        .build();
+        //private long standardTime = -1;
+        //private long standardFrequency = 0;
+        Map<Integer, Long> countList = new HashMap<>();
+        long frequence = -1;
+        for (int i = 0; i < tableListValue.length; i++) {
+          SessionDataSet countSessionDataSet =
+                  countSession.executeQueryStatement("select count(*) from " + tableListName[i]);
+          RowRecord countRowRecord = countSessionDataSet.next();
+          Field field = countRowRecord.getField(0);
+          long countValue = field.getLongV();
+          countList.put(i, countValue);
+          countSessionDataSet.close();
+          // 等于的情况不需要更换索引，要按照索引顺序选定最高频
+          if (frequence < countValue) {
+            frequence = countValue;
+            sIndex = i;
+          }
+        }
+        for (int index = 0; index < tableListValue.length; index++) {
+          if (tableListName[index].equals(alignColumn)) {
+            sIndex = index;
+            break;
+          }
+        }
+        //maxCount = countList.get(sIndex);
         for (int i = 0; i < tableListValue.length; i++) {
           sessions[i] =
                   new TableSessionBuilder()
                           .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
                           .username("root")
                           .password("root")
-                          .database("nh")
+                          .database("b777")
                           .build();
+          sessionDataSets[i] = sessions[i].executeQueryStatement(tableListValue[i]);
+          dataIterators[i] = sessionDataSets[i].iterator();
+          CacheLine cacheLine = new CacheLine(dataIterators[i]);
+          cacheLine.next();
+          cacheLines[i] = cacheLine;
         }
-      } catch (IoTDBConnectionException e) {
+      } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
       }
     }
@@ -153,88 +184,39 @@ public class ParamAlignTableFunction implements TableFunction {
     @Override
     public void process(List<ColumnBuilder> columnBuilders) {
       try {
-        if (!isInit) {
-          countList = new HashMap<>();
-          long frequence = -1;
-          for (int i = 0; i < tableListValue.length; i++) {
-            SessionDataSet countSessionDataSet = countSession.executeQueryStatement("select count(*) from " + tableListName[i]);
-            RowRecord countRowRecord = countSessionDataSet.next();
-            Field field = countRowRecord.getField(0);
-            long countValue = field.getLongV();
-            countList.put(i, countValue);
-            countSessionDataSet.close();
-            // 等于的情况不需要更换索引，要按照索引顺序选定最高频
-            if (frequence < countValue) {
-              frequence = countValue;
-              sIndex = i;
-            }
-            sessionDataSets[i] = sessions[i].executeQueryStatement(tableListValue[i]);
-            dataIterators[i] = sessionDataSets[i].iterator();
-          }
-          for (int index = 0; index < tableListValue.length; index++) {
-            if (tableListName[index].equals(alignColumn)) {
-              sIndex = index;
-            }
-          }
-          isInit = true;
-        }
-
-
-        // todo:输出多个航班对齐结果
-
-        // todo:设置每次输出的行数
         int alignRows = 0;
 
         while (dataIterators[sIndex].next()) {
-          if (cacheFrontValue.containsKey(sIndex)) {
-            standardTime = dataIterators[sIndex].getLong("time") - cacheFrontValue.get(sIndex).getTime();
-          }
-          columnBuilders.get(0).writeLong(dataIterators[sIndex].getLong("time"));
-          columnBuilders.get(1).writeBinary(dataIterators[sIndex].getBlob("aircraft/tail"));
-          columnBuilders.get(sIndex + 2).writeDouble(dataIterators[sIndex].getDouble("value"));
-/*                    columnBuilders.get(2).writeDouble(dataIterators[sIndex].getDouble("value"));
-                    columnBuilders.get(3).writeDouble(dataIterators[sIndex].getDouble("value"));*/
+          long currentStandardTime = dataIterators[sIndex].getLong("time");
+          float currentValue = dataIterators[sIndex].getFloat("value");
+          Binary currentAir = dataIterators[sIndex].getBlob("aircraft/tail");
+          columnBuilders.get(0).writeLong(currentStandardTime);
+          columnBuilders.get(1).writeBinary(currentAir);
+          columnBuilders.get(sIndex + 2).writeFloat(currentValue);
           for (int index = 0; index < tableListValue.length; index++) {
-            if (index != sIndex) {
-              dataIterators[index].next();
-              if (cacheFrontValue.containsKey(index)) {
-                //TimeAndValue lastTV = cacheFrontValue.get(index);
-                long sIndexTime = cacheFrontValue.get(sIndex).getTime();
-                long currentTime = dataIterators[index].getLong("time");
-                // 是否添加等于
-                while (sIndexTime > currentTime && sIndexTime - currentTime > (standardTime / 2.0)) {
-                  System.out.println(sIndexTime - currentTime);
-                  columnBuilders.get(index + 2).writeDouble(cacheFrontValue.get(index).getValue());
-                  sIndexTime -= standardTime;
-                }
-                double value = dataIterators[index].getDouble("value");
-                columnBuilders.get(index + 2).writeDouble(value);
-                TimeAndValue tv = new TimeAndValue(currentTime, value);
-                cacheFrontValue.put(index, tv);
+            if (index == sIndex) continue;
+            while (cacheLines[index].hasNext()) {
+              long firstDiff = Math.abs(cacheLines[index].getT1() - currentStandardTime);
+              long secondDiff = cacheLines[index].hasNext() ? Math.abs(cacheLines[index].getT2() - currentStandardTime) : Long.MAX_VALUE;
+              if (firstDiff <= secondDiff) {
+                columnBuilders.get(index + 2).writeFloat(cacheLines[index].getValue1());
+                break;
               } else {
-                TimeAndValue tv = new TimeAndValue(dataIterators[index].getLong("time"), dataIterators[index].getDouble("value"));
-                cacheFrontValue.put(index, tv);
+                cacheLines[index].next();
               }
             }
+            if (!cacheLines[index].hasNext()) {
+              columnBuilders.get(index + 2).appendNull();
+            }
           }
-          TimeAndValue tv = new TimeAndValue(dataIterators[sIndex].getLong("time"), dataIterators[sIndex].getDouble("value"));
-          cacheFrontValue.put(sIndex, tv);
+          alignRows++;
+          if (alignRows >= 1000) {
+            return;
+          }
         }
-
-                long tempCount = 0;
-                for (int i = 0; i < tableListValue.length; i++) {
-                    if (i!= sIndex) {
-                        while (tempCount < 19) {
-                            columnBuilders.get(i + 2).writeDouble(0.0);
-                            tempCount++;
-                        }
-                        tempCount = 0;
-                    }
-                }
-
         finish = true;
       } catch (IoTDBConnectionException | StatementExecutionException e) {
-        //} catch (Exception e) {
+        // } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }
@@ -268,32 +250,6 @@ public class ParamAlignTableFunction implements TableFunction {
     return tableNameList;
   }
 
-  private static class TimeAndValue {
-    private long time;
-    private double value;
-
-    TimeAndValue(long time, double value) {
-      this.time = time;
-      this.value = value;
-    }
-
-    public long getTime() {
-      return time;
-    }
-
-    public double getValue() {
-      return value;
-    }
-
-    public void setTime (long time) {
-      this.time = time;
-    }
-
-    public void setValue (double value) {
-      this.value = value;
-    }
-  }
-
   // 查询语句为 select * from n21 where value > 10 and time xxx 这种类型
   // 最后关心解析的最优实现
   private String[] analyzeSplit(String sourceList) {
@@ -312,9 +268,69 @@ public class ParamAlignTableFunction implements TableFunction {
       String first = eachAircraft[0];
       String last = eachAircraft[1];
       String air = eachAircraft[2];
-      String sql = tableListValue[hb] + " where \"aircraft/tail\" = " + air + " and time >= " + first + " and time <= " + last;
+      String sql =
+              tableListValue[hb]
+                      + " where \"aircraft/tail\" = "
+                      + air
+                      + " and time >= "
+                      + first
+                      + " and time <= "
+                      + last;
       sqlList[hb] = sql;
     }
     return sqlList;
+  }
+
+  public static class CacheLine {
+    private long t1 = Long.MIN_VALUE;
+    private long t2 = -1;
+    private float value1;
+    private float value2;
+    private boolean finish = true;
+    private SessionDataSet.DataIterator iterator;
+
+    public CacheLine(SessionDataSet.DataIterator iterator) {
+      this.iterator = iterator;
+    }
+
+    public void next() throws IoTDBConnectionException, StatementExecutionException {
+      if (t1 == Long.MIN_VALUE) {
+        finish = iterator.next();
+        t1 = iterator.getLong("time");
+        value1 = iterator.getFloat("value");
+        finish = iterator.next();
+        if (finish) {
+          t2 = iterator.getLong("time");
+          value2 = iterator.getFloat("value");
+        }
+      }
+      finish = iterator.next();
+      t1 = t2;
+      value1 = value2;
+      if (finish) {
+        t2 = iterator.getLong("time");
+        value2 = iterator.getFloat("value");
+      }
+    }
+
+    public boolean hasNext() {
+      return finish;
+    }
+
+    public long getT1() {
+      return t1;
+    }
+
+    public long getT2() {
+      return t2;
+    }
+
+    public float getValue1() {
+      return value1;
+    }
+
+    public float getValue2() {
+      return value2;
+    }
   }
 }
