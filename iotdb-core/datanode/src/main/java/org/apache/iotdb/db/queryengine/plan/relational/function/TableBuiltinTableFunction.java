@@ -22,7 +22,7 @@ package org.apache.iotdb.db.queryengine.plan.relational.function;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.CapacityTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.CumulateTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.HOPTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.ParamAlignTableFunction;
+import org.apache.iotdb.commons.udf.builtin.relational.tvf.InnerParamAlignTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.SessionTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.TumbleTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.VariationTableFunction;
@@ -44,7 +44,7 @@ public enum TableBuiltinTableFunction {
   CAPACITY("capacity"),
   FORECAST("forecast"),
   PATTERN_MATCH("pattern_match"),
-  PARAM_ALIGN("param_align");
+  INNER_PARAM_ALIGN("inner_param_align");
 
   private final String functionName;
 
@@ -88,8 +88,8 @@ public enum TableBuiltinTableFunction {
         return new CapacityTableFunction();
       case "forecast":
         return new ForecastTableFunction();
-      case "param_align":
-        return new ParamAlignTableFunction();
+      case "inner_param_align":
+        return new InnerParamAlignTableFunction();
       default:
         throw new UnsupportedOperationException("Unsupported table function: " + functionName);
     }
