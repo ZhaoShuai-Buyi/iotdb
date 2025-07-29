@@ -5,6 +5,7 @@ import org.apache.iotdb.isession.SessionDataSet;
 import org.apache.iotdb.rpc.IoTDBConnectionException;
 import org.apache.iotdb.rpc.StatementExecutionException;
 import org.apache.iotdb.session.TableSessionBuilder;
+import org.apache.iotdb.udf.api.exception.UDFArgumentNotValidException;
 import org.apache.iotdb.udf.api.exception.UDFException;
 import org.apache.iotdb.udf.api.relational.TableFunction;
 import org.apache.iotdb.udf.api.relational.table.MapTableFunctionHandle;
@@ -26,7 +27,6 @@ import org.apache.tsfile.utils.Binary;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -34,6 +34,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
 
   private final String TABLE_LIST = "table";
   private final String ALIGN_COLUMN = "alignColumn";
+  private final String FILL = "fill";
   private final String AIRCRAFT = "aircraft";
 
   @Override
@@ -45,6 +46,11 @@ public class InnerParamAlignTableFunction implements TableFunction {
                     .type(Type.STRING)
                     .defaultValue("default")
                     .build(),
+            ScalarParameterSpecification.builder()
+                    .name(FILL)
+                    .type(Type.STRING)
+                    .defaultValue("previous")
+                    .build(),
             ScalarParameterSpecification.builder().name(AIRCRAFT).type(Type.STRING).build());
   }
 
@@ -52,22 +58,34 @@ public class InnerParamAlignTableFunction implements TableFunction {
   public TableFunctionAnalysis analyze(Map<String, Argument> arguments) throws UDFException {
 
     ScalarArgument tableList = (ScalarArgument) arguments.get(TABLE_LIST);
-    // ScalarArgument aircraftList = (ScalarArgument) arguments.get(AIRCRAFT);
     String[] tableListValue = analyzeSplit(String.valueOf(tableList.getValue()));
-    // String[] aircraftListValue = analyzeAircraft(aircraftList);
     DescribedSchema.Builder schemaBuilder = DescribedSchema.builder();
     schemaBuilder.addField("time", Type.TIMESTAMP);
     schemaBuilder.addField("aircraft", Type.STRING);
-    for (int i = 0; i < tableListValue.length; i++) {
-      // todo: 类型是否要判断
-      schemaBuilder.addField("value" + (i + 1), Type.FLOAT);
+    String[] tableNames = getTableNameList(tableListValue);
+    for (int i = 0; i < tableNames.length; i++) {
+      // todo: 类型判断
+      schemaBuilder.addField(tableNames[i], Type.FLOAT);
     }
     DescribedSchema schema = schemaBuilder.build();
 
+    // 判断 alignColumn 和 fill，填写有误给出报错提示
+    ScalarArgument alignColumn = (ScalarArgument) arguments.get(ALIGN_COLUMN);
+    ScalarArgument fill = (ScalarArgument) arguments.get(FILL);
+    boolean alignValidate = false;
+    if ("default".equals(alignColumn.getValue())) alignValidate = true;
+    for (String tableName : tableNames) {
+      if (alignColumn.getValue().equals(tableName)) alignValidate = true;
+    }
+    if (!alignValidate) throw new UDFArgumentNotValidException("alignColumn support default or tableName");
+    if (!"previous".equals(fill.getValue())) {
+      throw new UDFArgumentNotValidException("fill only support previous");
+    }
     MapTableFunctionHandle handle =
             new MapTableFunctionHandle.Builder()
                     .addProperty(TABLE_LIST, ((ScalarArgument) arguments.get(TABLE_LIST)).getValue())
                     .addProperty(ALIGN_COLUMN, ((ScalarArgument) arguments.get(ALIGN_COLUMN)).getValue())
+                    .addProperty(FILL, ((ScalarArgument) arguments.get(FILL)).getValue())
                     .addProperty(AIRCRAFT, ((ScalarArgument) arguments.get(AIRCRAFT)).getValue())
                     .build();
 
@@ -95,21 +113,23 @@ public class InnerParamAlignTableFunction implements TableFunction {
 
   private class ParamAlignProcessor implements TableFunctionLeafProcessor {
 
+    private String[][] allTable;
     private String[] tableListValue;
     private final String[] tableListName;
-    // todo:高频向低频对齐
     private final String alignColumn;
     private final String[] aircraftListValue;
+    private int airCount = 1;
+    private int curCount = 0;
     private int sIndex = -1;
 
-    private CacheLine[] cacheLines = null;
+    private CacheLine[][] cacheLines = null;
+    //private TimeAndValue[] linearCache = null;
 
     private boolean finish = false;
-    //private boolean isInit = false;
 
-    private ITableSession[] sessions = null;
-    private SessionDataSet[] sessionDataSets = null;
-    private SessionDataSet.DataIterator[] dataIterators = null;
+    private ITableSession[][] allSessions = null;
+    private SessionDataSet[][] allSessionDataSets = null;
+    private SessionDataSet.DataIterator[][] allDataIterators = null;
 
     private ITableSession countSession = null;
 
@@ -119,34 +139,42 @@ public class InnerParamAlignTableFunction implements TableFunction {
       this.alignColumn = alignColumn;
       this.aircraftListValue = analyzeSplit(aircraftListValue);
       int size = this.tableListValue.length;
-      this.sessions = new ITableSession[size];
-      this.sessionDataSets = new SessionDataSet[size];
-      this.dataIterators = new SessionDataSet.DataIterator[size];
-      this.cacheLines = new CacheLine[size];
+      this.airCount = this.aircraftListValue.length;
+      this.allTable = new String[this.airCount][size];
+      this.allSessions = new ITableSession[this.airCount][size];
+      this.allSessionDataSets = new SessionDataSet[this.airCount][size];
+      this.allDataIterators = new SessionDataSet.DataIterator[this.airCount][size];
+      this.cacheLines = new CacheLine[this.airCount][size];
+      //this.linearCache = new TimeAndValue[size];
     }
 
     @Override
     public void beforeStart() {
-      tableListValue = getSql(tableListValue, aircraftListValue);
+      allTable = getSql(tableListValue, aircraftListValue);
       try {
         countSession =
                 new TableSessionBuilder()
-                        .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
+                        .nodeUrls(Collections.singletonList("127.0.0.1:6669"))
                         .username("root")
                         .password("root")
                         .database("b777")
                         .build();
-        //private long standardTime = -1;
-        //private long standardFrequency = 0;
-        Map<Integer, Long> countList = new HashMap<>();
         long frequence = -1;
+        String[] firstAircraft = aircraftListValue[0].split(",");
+        String first = firstAircraft[0];
+        String last = firstAircraft[1];
+        String airInfo = firstAircraft[2];
         for (int i = 0; i < tableListValue.length; i++) {
           SessionDataSet countSessionDataSet =
-                  countSession.executeQueryStatement("select count(*) from " + tableListName[i]);
+                  countSession.executeQueryStatement("select count(*) from " + tableListName[i] + " where \"aircraft/tail\" = "
+                          + airInfo
+                          + " and time >= "
+                          + first
+                          + " and time <= "
+                          + last);
           RowRecord countRowRecord = countSessionDataSet.next();
           Field field = countRowRecord.getField(0);
           long countValue = field.getLongV();
-          countList.put(i, countValue);
           countSessionDataSet.close();
           // 等于的情况不需要更换索引，要按照索引顺序选定最高频
           if (frequence < countValue) {
@@ -160,20 +188,22 @@ public class InnerParamAlignTableFunction implements TableFunction {
             break;
           }
         }
-        //maxCount = countList.get(sIndex);
-        for (int i = 0; i < tableListValue.length; i++) {
-          sessions[i] =
-                  new TableSessionBuilder()
-                          .nodeUrls(Collections.singletonList("127.0.0.1:6667"))
-                          .username("root")
-                          .password("root")
-                          .database("b777")
-                          .build();
-          sessionDataSets[i] = sessions[i].executeQueryStatement(tableListValue[i]);
-          dataIterators[i] = sessionDataSets[i].iterator();
-          CacheLine cacheLine = new CacheLine(dataIterators[i]);
-          cacheLine.next();
-          cacheLines[i] = cacheLine;
+
+        for (int air = 0; air < aircraftListValue.length; air++) {
+          for (int i = 0; i < tableListValue.length; i++) {
+            allSessions[air][i] =
+                    new TableSessionBuilder()
+                            .nodeUrls(Collections.singletonList("127.0.0.1:6669"))
+                            .username("root")
+                            .password("root")
+                            .database("b777")
+                            .build();
+            allSessionDataSets[air][i] = allSessions[air][i].executeQueryStatement(allTable[air][i]);
+            allDataIterators[air][i] = allSessionDataSets[air][i].iterator();
+            CacheLine cacheLine = new CacheLine(allDataIterators[air][i]);
+            cacheLine.next();
+            cacheLines[air][i] = cacheLine;
+          }
         }
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
@@ -186,27 +216,33 @@ public class InnerParamAlignTableFunction implements TableFunction {
       try {
         int alignRows = 0;
 
-        while (dataIterators[sIndex].next()) {
-          long currentStandardTime = dataIterators[sIndex].getLong("time");
-          float currentValue = dataIterators[sIndex].getFloat("value");
-          Binary currentAir = dataIterators[sIndex].getBlob("aircraft/tail");
+        while (allDataIterators[curCount][sIndex].next()) {
+          long currentStandardTime = allDataIterators[curCount][sIndex].getLong("time");
+          float currentValue = allDataIterators[curCount][sIndex].getFloat("value");
+          Binary currentAir = allDataIterators[curCount][sIndex].getBlob("aircraft/tail");
           columnBuilders.get(0).writeLong(currentStandardTime);
           columnBuilders.get(1).writeBinary(currentAir);
           columnBuilders.get(sIndex + 2).writeFloat(currentValue);
           for (int index = 0; index < tableListValue.length; index++) {
             if (index == sIndex) continue;
-            while (cacheLines[index].hasNext()) {
-              long firstDiff = Math.abs(cacheLines[index].getT1() - currentStandardTime);
-              long secondDiff = cacheLines[index].hasNext() ? Math.abs(cacheLines[index].getT2() - currentStandardTime) : Long.MAX_VALUE;
+            while (cacheLines[curCount][index].hasNext()) {
+              long firstDiff = Math.abs(cacheLines[curCount][index].getT1() - currentStandardTime);
+              long secondDiff = cacheLines[curCount][index].hasNext() ? Math.abs(cacheLines[curCount][index].getT2() - currentStandardTime) : Long.MAX_VALUE;
               if (firstDiff <= secondDiff) {
-                columnBuilders.get(index + 2).writeFloat(cacheLines[index].getValue1());
+                columnBuilders.get(index + 2).writeFloat(cacheLines[curCount][index].getValue1());
                 break;
+/*                                if (linearCache[index].lastTime == Long.MIN_VALUE) {
+
+                                } else {
+
+                                }
+                                break;*/
               } else {
-                cacheLines[index].next();
+                cacheLines[curCount][index].next();
               }
             }
-            if (!cacheLines[index].hasNext()) {
-              columnBuilders.get(index + 2).appendNull();
+            if (!cacheLines[curCount][index].hasNext()) {
+              columnBuilders.get(index + 2).writeFloat(cacheLines[curCount][index].getValue1());
             }
           }
           alignRows++;
@@ -214,9 +250,17 @@ public class InnerParamAlignTableFunction implements TableFunction {
             return;
           }
         }
-        finish = true;
+/*                for (int linear = 0; linear < tableListValue.length; linear++) {
+                    linearCache[linear].lastTime = Long.MIN_VALUE;
+                    linearCache[linear].lastValue = Float.MIN_VALUE;
+                }*/
+        curCount++;
+        if (curCount >= airCount) {
+          finish = true;
+        } else {
+          return;
+        }
       } catch (IoTDBConnectionException | StatementExecutionException e) {
-        // } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }
@@ -225,9 +269,11 @@ public class InnerParamAlignTableFunction implements TableFunction {
     public void beforeDestroy() {
       try {
         countSession.close();
-        for (int i = 0; i < tableListValue.length; i++) {
-          sessionDataSets[i].close();
-          sessions[i].close();
+        for (int air = 0; air < airCount; air++) {
+          for (int i = 0; i < tableListValue.length; i++) {
+            allSessionDataSets[air][i].close();
+            allSessions[air][i].close();
+          }
         }
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
@@ -250,8 +296,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
     return tableNameList;
   }
 
-  // 查询语句为 select * from n21 where value > 10 and time xxx 这种类型
-  // 最后关心解析的最优实现
   private String[] analyzeSplit(String sourceList) {
     String[] listValue = sourceList.split("\\),\\(");
     listValue[0] = listValue[0].substring(1);
@@ -260,25 +304,28 @@ public class InnerParamAlignTableFunction implements TableFunction {
     return listValue;
   }
 
-  private String[] getSql(String[] tableListValue, String[] aircraftListValue) {
-    String[] sqlList = new String[tableListValue.length];
-    // todo：需要添加其他航班信息
-    String[] eachAircraft = aircraftListValue[0].split(",");
-    for (int hb = 0; hb < tableListValue.length; hb++) {
-      String first = eachAircraft[0];
-      String last = eachAircraft[1];
-      String air = eachAircraft[2];
-      String sql =
-              tableListValue[hb]
-                      + " where \"aircraft/tail\" = "
-                      + air
-                      + " and time >= "
-                      + first
-                      + " and time <= "
-                      + last;
-      sqlList[hb] = sql;
+  private String[][] getSql(String[] tableListValue, String[] aircraftListValue) {
+    String[][] result = new String[aircraftListValue.length][tableListValue.length];
+    for (int air = 0; air < aircraftListValue.length; air++) {
+      String[] sqlList = new String[tableListValue.length];
+      String[] eachAircraft = aircraftListValue[air].split(",");
+      for (int hb = 0; hb < tableListValue.length; hb++) {
+        String first = eachAircraft[0];
+        String last = eachAircraft[1];
+        String airInfo = eachAircraft[2];
+        String sql =
+                tableListValue[hb]
+                        + " where \"aircraft/tail\" = "
+                        + airInfo
+                        + " and time >= "
+                        + first
+                        + " and time <= "
+                        + last;
+        sqlList[hb] = sql;
+      }
+      result[air] = sqlList;
     }
-    return sqlList;
+    return result;
   }
 
   public static class CacheLine {
@@ -332,5 +379,10 @@ public class InnerParamAlignTableFunction implements TableFunction {
     public float getValue2() {
       return value2;
     }
+  }
+
+  public static class TimeAndValue {
+    public long lastTime = Long.MIN_VALUE;
+    public float lastValue = Float.MIN_VALUE;
   }
 }
