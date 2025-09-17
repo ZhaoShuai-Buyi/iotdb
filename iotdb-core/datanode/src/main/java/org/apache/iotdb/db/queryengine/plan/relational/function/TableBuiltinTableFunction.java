@@ -19,12 +19,7 @@
 
 package org.apache.iotdb.db.queryengine.plan.relational.function;
 
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.CapacityTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.CumulateTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.HOPTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.SessionTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.TumbleTableFunction;
-import org.apache.iotdb.commons.udf.builtin.relational.tvf.VariationTableFunction;
+import org.apache.iotdb.commons.udf.builtin.relational.tvf.*;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.ForecastTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.PatternMatchTableFunction;
 import org.apache.iotdb.udf.api.relational.TableFunction;
@@ -42,7 +37,10 @@ public enum TableBuiltinTableFunction {
   VARIATION("variation"),
   CAPACITY("capacity"),
   FORECAST("forecast"),
-  PATTERN_MATCH("pattern_match");
+  PATTERN_MATCH("pattern_match"),
+  HIGH_USER_ANOMALY_DETECT("high_user_anomaly_detect"),
+  COLLECT_INTEGRITY_RATE("collect_integrity_rate"),
+  DIM_INTEGRITY_RATE("dim_integrity_rate");
 
   private final String functionName;
 
@@ -86,6 +84,12 @@ public enum TableBuiltinTableFunction {
         return new CapacityTableFunction();
       case "forecast":
         return new ForecastTableFunction();
+      case "high_user_anomaly_detect":
+        return new HighUserAnomalyDetectTableFunction();
+      case "collect_integrity_rate":
+        return new CollectIntegrityRateTableFunction();
+      case "dim_integrity_rate":
+        return new DimIntegrityRateTableFunction();
       default:
         throw new UnsupportedOperationException("Unsupported table function: " + functionName);
     }
