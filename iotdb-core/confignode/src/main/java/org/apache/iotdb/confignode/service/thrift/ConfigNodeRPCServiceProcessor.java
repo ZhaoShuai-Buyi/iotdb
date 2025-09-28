@@ -527,7 +527,10 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
             : PathPatternTree.deserialize(ByteBuffer.wrap(req.getScopePatternTree()));
     final CountDatabasePlan plan =
         new CountDatabasePlan(
-            req.getDatabasePathPattern(), scope, req.isSetIsTableModel() && req.isIsTableModel());
+            req.getDatabasePathPattern(),
+            scope,
+            req.isSetIsTableModel() && req.isIsTableModel(),
+            !req.isSetCanSeeAuditDB() || req.isCanSeeAuditDB());
     final CountDatabaseResp countDatabaseResp =
         (CountDatabaseResp) configManager.countMatchedDatabases(plan);
 
@@ -547,7 +550,8 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
             req.getDatabasePathPattern(),
             scope,
             req.isSetIsTableModel() && req.isIsTableModel(),
-            false);
+            false,
+            !req.isSetCanSeeAuditDB() || req.isCanSeeAuditDB());
     final DatabaseSchemaResp databaseSchemaResp =
         (DatabaseSchemaResp) configManager.getMatchedDatabaseSchemas(plan);
 
@@ -578,7 +582,7 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
   @Override
   public TSchemaPartitionTableResp getSchemaPartitionTable(final TSchemaPartitionReq req) {
     return configManager.getSchemaPartition(
-        PathPatternTree.deserialize(ByteBuffer.wrap(req.getPathPatternTree())));
+        PathPatternTree.deserialize(ByteBuffer.wrap(req.getPathPatternTree())), true);
   }
 
   @Override
@@ -608,7 +612,8 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
             ? SchemaConstant.ALL_MATCH_SCOPE
             : PathPatternTree.deserialize(ByteBuffer.wrap(req.getScopePatternTree()));
     PartialPath partialPath = patternTree.getAllPathPatterns().get(0);
-    return configManager.getNodePathsPartition(partialPath, scope, req.getLevel());
+    return configManager.getNodePathsPartition(
+        partialPath, scope, req.getLevel(), !req.isSetNeedAuditDB() || req.isNeedAuditDB());
   }
 
   @Override
@@ -630,17 +635,28 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
     if (req.getAuthorType() < 0 || req.getAuthorType() >= AuthorType.values().length) {
       throw new IndexOutOfBoundsException("Invalid Author Type ordinal");
     }
+    ConfigPhysicalPlanType configPhysicalPlanType =
+        ConfigPhysicalPlanType.values()[
+            req.getAuthorType() + ConfigPhysicalPlanType.CreateUser.ordinal()];
+    switch (configPhysicalPlanType) {
+      case UpdateUser:
+        configPhysicalPlanType = ConfigPhysicalPlanType.UpdateUserV2;
+        break;
+      case DropUser:
+        configPhysicalPlanType = ConfigPhysicalPlanType.DropUserV2;
+        break;
+    }
     return configManager.operatePermission(
         new AuthorTreePlan(
-            ConfigPhysicalPlanType.values()[
-                req.getAuthorType() + ConfigPhysicalPlanType.CreateUser.ordinal()],
+            configPhysicalPlanType,
             req.getUserName(),
             req.getRoleName(),
             req.getPassword(),
             req.getNewPassword(),
             req.getPermissions(),
             req.isGrantOpt(),
-            AuthUtils.deserializePartialPathList(ByteBuffer.wrap(req.getNodeNameList()))));
+            AuthUtils.deserializePartialPathList(ByteBuffer.wrap(req.getNodeNameList())),
+            req.getExecutedByUserID()));
   }
 
   @Override
@@ -660,11 +676,13 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
                     req.getNewPassword(),
                     req.getPermissions(),
                     req.isGrantOpt(),
-                    AuthUtils.deserializePartialPathList(ByteBuffer.wrap(req.getNodeNameList()))));
+                    AuthUtils.deserializePartialPathList(ByteBuffer.wrap(req.getNodeNameList())),
+                    req.getExecutedByUserID()));
     final TAuthorizerResp resp = new TAuthorizerResp(dataSet.getStatus());
     resp.setMemberInfo(dataSet.getMemberList());
     resp.setPermissionInfo(dataSet.getPermissionInfoResp());
     resp.setTag(dataSet.getTag());
+    resp.setUsersInfo(dataSet.getUsersInfo());
     return resp;
   }
 
@@ -673,17 +691,28 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
     if (req.getAuthorType() < 0 || req.getAuthorType() >= AuthorRType.values().length) {
       throw new IndexOutOfBoundsException("Invalid Author Type ordinal");
     }
+    ConfigPhysicalPlanType configPhysicalPlanType =
+        ConfigPhysicalPlanType.values()[
+            req.getAuthorType() + ConfigPhysicalPlanType.RCreateUser.ordinal()];
+    switch (configPhysicalPlanType) {
+      case RUpdateUser:
+        configPhysicalPlanType = ConfigPhysicalPlanType.RUpdateUserV2;
+        break;
+      case RDropUser:
+        configPhysicalPlanType = ConfigPhysicalPlanType.RDropUserV2;
+        break;
+    }
     return configManager.operatePermission(
         new AuthorRelationalPlan(
-            ConfigPhysicalPlanType.values()[
-                req.getAuthorType() + ConfigPhysicalPlanType.RCreateUser.ordinal()],
+            configPhysicalPlanType,
             req.getUserName(),
             req.getRoleName(),
             req.getDatabase(),
             req.getTable(),
             req.getPermissions(),
             req.isGrantOpt(),
-            req.getPassword()));
+            req.getPassword(),
+            req.getExecutedByUserID()));
   }
 
   @Override
@@ -707,6 +736,7 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
     final TAuthorizerResp resp = new TAuthorizerResp(dataSet.getStatus());
     resp.setMemberInfo(dataSet.getMemberList());
     resp.setPermissionInfo(dataSet.getPermissionInfoResp());
+    resp.setUsersInfo(dataSet.getUsersInfo());
     resp.setTag(dataSet.getTag());
     return resp;
   }
@@ -1012,8 +1042,8 @@ public class ConfigNodeRPCServiceProcessor implements IConfigNodeRPCService.Ifac
   }
 
   @Override
-  public TSStatus killQuery(String queryId, int dataNodeId) {
-    return configManager.killQuery(queryId, dataNodeId);
+  public TSStatus killQuery(String queryId, int dataNodeId, String allowedUsername) {
+    return configManager.killQuery(queryId, dataNodeId, allowedUsername);
   }
 
   @Override

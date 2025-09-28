@@ -20,6 +20,8 @@
 package org.apache.iotdb.db.protocol.session;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.commons.audit.UserEntity;
+import org.apache.iotdb.commons.auth.entity.User;
 import org.apache.iotdb.commons.conf.CommonDescriptor;
 import org.apache.iotdb.commons.conf.IoTDBConstant;
 import org.apache.iotdb.commons.exception.IoTDBRuntimeException;
@@ -157,7 +159,13 @@ public class SessionManager implements SessionManagerMBean {
     try {
       Statement statement = StatementGenerator.createStatement(lastDataQueryReq);
       SessionInfo sessionInfo =
-          new SessionInfo(0, AuthorityChecker.SUPER_USER, ZoneId.systemDefault());
+          new SessionInfo(
+              0,
+              new UserEntity(
+                  AuthorityChecker.SUPER_USER_ID,
+                  AuthorityChecker.SUPER_USER,
+                  IoTDBDescriptor.getInstance().getConfig().getInternalAddress()),
+              ZoneId.systemDefault());
 
       queryId = requestQueryId();
       ExecutionResult result =
@@ -249,8 +257,10 @@ public class SessionManager implements SessionManagerMBean {
             .setCode(TSStatusCode.INCOMPATIBLE_VERSION.getStatusCode())
             .setMessage("The version is incompatible, please upgrade to " + IoTDBConstant.VERSION);
       } else {
+        User user = AuthorityChecker.getUser(username);
+        long userId = user == null ? -1 : user.getUserId();
         session.setSqlDialect(sqlDialect);
-        supplySession(session, username, ZoneId.of(zoneId), clientVersion);
+        supplySession(session, userId, username, ZoneId.of(zoneId), clientVersion);
         String logInMessage = "Login successfully";
         if (timeToExpire != null && timeToExpire != Long.MAX_VALUE) {
           DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -519,10 +529,12 @@ public class SessionManager implements SessionManagerMBean {
   /** must be called after registerSession()) will mark the session login. */
   public void supplySession(
       IClientSession session,
+      long userId,
       String username,
       ZoneId zoneId,
       IoTDBConstant.ClientVersion clientVersion) {
     session.setId(sessionIdGenerator.incrementAndGet());
+    session.setUserId(userId);
     session.setUsername(username);
     session.setZoneId(zoneId);
     session.setClientVersion(clientVersion);
@@ -543,7 +555,7 @@ public class SessionManager implements SessionManagerMBean {
   public SessionInfo getSessionInfo(IClientSession session) {
     return new SessionInfo(
         session.getId(),
-        session.getUsername(),
+        new UserEntity(session.getUserId(), session.getUsername(), session.getClientAddress()),
         session.getZoneId(),
         session.getClientVersion(),
         session.getDatabaseName(),
@@ -555,7 +567,7 @@ public class SessionManager implements SessionManagerMBean {
   public SessionInfo copySessionInfoForTreeModel(final SessionInfo sessionInfo) {
     return new SessionInfo(
         sessionInfo.getSessionId(),
-        sessionInfo.getUserName(),
+        sessionInfo.getUserEntity(),
         ZoneId.systemDefault(),
         sessionInfo.getVersion(),
         sessionInfo.getDatabaseName().orElse(null),
@@ -565,7 +577,7 @@ public class SessionManager implements SessionManagerMBean {
   public SessionInfo getSessionInfoOfTreeModel(IClientSession session) {
     return new SessionInfo(
         session.getId(),
-        session.getUsername(),
+        new UserEntity(session.getUserId(), session.getUsername(), session.getClientAddress()),
         ZoneId.systemDefault(),
         session.getClientVersion(),
         session.getDatabaseName(),
@@ -575,7 +587,7 @@ public class SessionManager implements SessionManagerMBean {
   public SessionInfo getSessionInfoOfTableModel(IClientSession session) {
     return new SessionInfo(
         session.getId(),
-        session.getUsername(),
+        new UserEntity(session.getUserId(), session.getUsername(), session.getClientAddress()),
         ZoneId.systemDefault(),
         session.getClientVersion(),
         session.getDatabaseName(),
@@ -585,7 +597,7 @@ public class SessionManager implements SessionManagerMBean {
   public SessionInfo getSessionInfoOfPipeReceiver(IClientSession session, String databaseName) {
     return new SessionInfo(
         session.getId(),
-        session.getUsername(),
+        new UserEntity(session.getUserId(), session.getUsername(), session.getClientAddress()),
         ZoneId.systemDefault(),
         session.getClientVersion(),
         databaseName,

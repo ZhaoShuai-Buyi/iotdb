@@ -20,6 +20,8 @@
 package org.apache.iotdb.db.pipe.receiver.protocol.thrift;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.commons.audit.IAuditEntity;
+import org.apache.iotdb.commons.audit.UserEntity;
 import org.apache.iotdb.commons.conf.IoTDBConstant;
 import org.apache.iotdb.commons.exception.IllegalPathException;
 import org.apache.iotdb.commons.exception.pipe.PipeRuntimeOutOfMemoryCriticalException;
@@ -659,12 +661,15 @@ public class IoTDBDataNodeReceiver extends IoTDBFileReceiver {
     // We may be able to skip the alter logical view's exception parsing because
     // the "AlterLogicalViewNode" is itself idempotent
     if (req.getPlanNode() instanceof AlterLogicalViewNode) {
-      final TSStatus status =
-          ((AlterLogicalViewNode) req.getPlanNode()).checkPermissionBeforeProcess(username);
+      AlterLogicalViewNode node = (AlterLogicalViewNode) req.getPlanNode();
+      IAuditEntity entity = AuthorityChecker.createIAuditEntity(username, null);
+      TSStatus status =
+          AuthorityChecker.getAccessControl()
+              .checkCanAlterView(entity, node.getSourcePaths(), node.getTargetPaths());
       if (status.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
         PipeLogger.log(
             LOGGER::warn,
-            "Receiver id = {}: Failed to check authority for statement {}, username = {}, response = {}.",
+            "Receiver id = %s: Failed to check authority for statement %s, username = %s, response = %s.",
             receiverId.get(),
             StatementType.ALTER_LOGICAL_VIEW.name(),
             username,
@@ -816,7 +821,7 @@ public class IoTDBDataNodeReceiver extends IoTDBFileReceiver {
       } else {
         PipeLogger.log(
             LOGGER::warn,
-            "Receiver id = {}: Failure status encountered while executing statement {}: {}",
+            "Receiver id = %s: Failure status encountered while executing statement %s: %s",
             receiverId.get(),
             statement,
             result);
@@ -825,7 +830,7 @@ public class IoTDBDataNodeReceiver extends IoTDBFileReceiver {
     } catch (final Exception e) {
       PipeLogger.log(
           LOGGER::warn,
-          "Receiver id = {}: Exception encountered while executing statement {}: ",
+          "Receiver id = %s: Exception encountered while executing statement %s: ",
           receiverId.get(),
           statement,
           e);
@@ -879,7 +884,7 @@ public class IoTDBDataNodeReceiver extends IoTDBFileReceiver {
       if (permissionCheckStatus.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
         PipeLogger.log(
             LOGGER::warn,
-            "Receiver id = {}: Failed to check authority for statement {}, username = {}, response = {}.",
+            "Receiver id = %s: Failed to check authority for statement %s, username = %s, response = %s.",
             receiverId.get(),
             statement.getType().name(),
             username,
@@ -991,7 +996,8 @@ public class IoTDBDataNodeReceiver extends IoTDBFileReceiver {
       return;
     }
 
-    Coordinator.getInstance().getAccessControl().checkCanCreateDatabase(username, database);
+    AuthorityChecker.getAccessControl()
+        .checkCanCreateDatabase(username, database, new UserEntity(userId, username, cliHostname));
     final TDatabaseSchema schema = new TDatabaseSchema(new TDatabaseSchema(database));
     schema.setIsTableModel(true);
 

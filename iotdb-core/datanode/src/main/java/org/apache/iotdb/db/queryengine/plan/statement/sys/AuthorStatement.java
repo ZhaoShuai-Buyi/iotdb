@@ -23,6 +23,7 @@ import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.commons.path.PartialPath;
 import org.apache.iotdb.commons.utils.AuthUtils;
 import org.apache.iotdb.commons.utils.CommonDateTimeUtils;
+import org.apache.iotdb.db.auth.AuthorityChecker;
 import org.apache.iotdb.db.queryengine.plan.analyze.QueryType;
 import org.apache.iotdb.db.queryengine.plan.statement.AuthorType;
 import org.apache.iotdb.db.queryengine.plan.statement.IConfigStatement;
@@ -46,6 +47,7 @@ public class AuthorStatement extends Statement implements IConfigStatement {
   private String[] privilegeList;
   private List<PartialPath> nodeNameList;
   private boolean grantOpt;
+  private long executedByUserId;
 
   /**
    * Constructor with AuthorType.
@@ -177,6 +179,14 @@ public class AuthorStatement extends Statement implements IConfigStatement {
     this.grantOpt = grantOpt;
   }
 
+  public long getExecutedByUserId() {
+    return executedByUserId;
+  }
+
+  public void setExecutedByUserId(long executedByUserId) {
+    this.executedByUserId = executedByUserId;
+  }
+
   @Override
   public <R, C> R accept(StatementVisitor<R, C> visitor, C context) {
     return visitor.visitAuthor(this, context);
@@ -269,5 +279,36 @@ public class AuthorStatement extends Statement implements IConfigStatement {
       return new TSStatus(e.getStatusCode()).setMessage(e.getMessage());
     }
     return null;
+  }
+
+  public TSStatus checkStatementIsValid(String currentUser) {
+    switch (authorType) {
+      case CREATE_USER:
+        if (AuthorityChecker.SUPER_USER.equals(userName)) {
+          return AuthorityChecker.getTSStatus(
+              false, "Cannot create user has same name with admin user");
+        }
+        break;
+      case DROP_USER:
+        if (AuthorityChecker.SUPER_USER.equals(userName) || userName.equals(currentUser)) {
+          return AuthorityChecker.getTSStatus(false, "Cannot drop admin user or yourself");
+        }
+      case CREATE_ROLE:
+        if (AuthorityChecker.SUPER_USER.equals(roleName)) {
+          return AuthorityChecker.getTSStatus(
+              false, "Cannot create role has same name with admin user");
+        }
+        break;
+      case REVOKE_USER:
+      case GRANT_USER:
+      case GRANT_ROLE:
+      case REVOKE_ROLE:
+        if (AuthorityChecker.SUPER_USER.equals(userName)) {
+          return AuthorityChecker.getTSStatus(
+              false, "Cannot grant/revoke privileges of admin user");
+        }
+        break;
+    }
+    return RpcUtils.SUCCESS_STATUS;
   }
 }
