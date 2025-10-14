@@ -51,6 +51,10 @@ public class InnerParamAlignTableFunction implements TableFunction {
   private final String LEAVE_LOCATION = "leaveLocation";
   private final String ARRIVE_LOCATION = "arriveLocation";
 
+  // 调试攒批效果
+  private final String COLUMN_BUILDER_BATCH = "columnBuilderBatch";
+  private final String CAPACITY = "capacity";
+
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {
     return Arrays.asList(
@@ -77,6 +81,16 @@ public class InnerParamAlignTableFunction implements TableFunction {
             .name(ARRIVE_LOCATION)
             .type(Type.STRING)
             .defaultValue("null")
+            .build(),
+        ScalarParameterSpecification.builder()
+            .name(COLUMN_BUILDER_BATCH)
+            .type(Type.INT32)
+            .defaultValue(3000)
+            .build(),
+        ScalarParameterSpecification.builder()
+            .name(CAPACITY)
+            .type(Type.INT32)
+            .defaultValue(10000)
             .build());
   }
 
@@ -117,6 +131,10 @@ public class InnerParamAlignTableFunction implements TableFunction {
             .addProperty(AIRCRAFT, ((ScalarArgument) arguments.get(AIRCRAFT)).getValue())
             .addProperty(START_TIME, ((ScalarArgument) arguments.get(START_TIME)).getValue())
             .addProperty(END_TIME, ((ScalarArgument) arguments.get(END_TIME)).getValue())
+            .addProperty(
+                COLUMN_BUILDER_BATCH,
+                ((ScalarArgument) arguments.get(COLUMN_BUILDER_BATCH)).getValue())
+            .addProperty(CAPACITY, ((ScalarArgument) arguments.get(CAPACITY)).getValue())
             .build();
 
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
@@ -135,12 +153,14 @@ public class InnerParamAlignTableFunction implements TableFunction {
       public TableFunctionLeafProcessor getSplitProcessor() {
         MapTableFunctionHandle handle = (MapTableFunctionHandle) tableFunctionHandle;
         return new ParamAlignProcessor(
-            (String) (handle.getProperty(TABLE_LIST)),
-            (String) (handle.getProperty(ALIGN_COLUMN)),
-            (String) (handle.getProperty(FILL)),
-            (String) (handle.getProperty(AIRCRAFT)),
-            (String) (handle.getProperty(START_TIME)),
-            (String) (handle.getProperty(END_TIME)));
+            (String) handle.getProperty(TABLE_LIST),
+            (String) handle.getProperty(ALIGN_COLUMN),
+            (String) handle.getProperty(FILL),
+            (String) handle.getProperty(AIRCRAFT),
+            (String) handle.getProperty(START_TIME),
+            (String) handle.getProperty(END_TIME),
+            (Integer) handle.getProperty(COLUMN_BUILDER_BATCH),
+            (Integer) handle.getProperty(CAPACITY));
       }
     };
   }
@@ -168,6 +188,8 @@ public class InnerParamAlignTableFunction implements TableFunction {
     // 时间间隔记录 & time 和 value 列缓存
     private List<ArrayList<Long>> timeList = null;
     private List<ArrayList<Float>> valueList = null;
+    private List<Iterator<Long>> timeIterators = null;
+    private List<Iterator<Float>> valueIterators = null;
     private List<Long> rulelCandidator = null;
     private int maxLine = 0;
 
@@ -187,12 +209,13 @@ public class InnerParamAlignTableFunction implements TableFunction {
     private Binary aircraftOnly = null;
     private String startTime = null;
     private String endTime = null;
+    private int capacity = 10000;
 
     // 本机地址
     String address = null;
 
     // fill 攒批相关参数
-    private int columnBuilder_batch = 5000;
+    private int columnBuilder_batch = 3000;
     private int columnBuilder_index = 0;
     private float previous_lastValue = 0.0f;
     private int next_nullCount = 0;
@@ -204,12 +227,16 @@ public class InnerParamAlignTableFunction implements TableFunction {
         String fill,
         String aircraft,
         String startTime,
-        String endTime) {
+        String endTime,
+        Integer columnBuilder_batch,
+        Integer capacity) {
       this.fill = fill;
       this.aircraft = aircraft;
       this.aircraftOnly = new Binary(aircraft.getBytes());
       this.startTime = startTime;
       this.endTime = endTime;
+      this.columnBuilder_batch = columnBuilder_batch;
+      this.capacity = capacity;
 
       this.tableNameList = getTableNameList(tableList);
       this.size = this.tableNameList.length;
@@ -222,11 +249,20 @@ public class InnerParamAlignTableFunction implements TableFunction {
 
       this.timeList = new ArrayList<>(size);
       this.valueList = new ArrayList<>(size);
+      for (int i = 0; i < size; i++) {
+        this.timeList.add(new ArrayList<>(capacity));
+        this.valueList.add(new ArrayList<>(capacity));
+      }
+      timeIterators = new ArrayList<>(size);
+      valueIterators = new ArrayList<>(size);
 
       this.rulelCandidator = new ArrayList<>(size);
 
       this.tempResult = new ArrayList<>(size);
-      this.tempTimestamp = new ArrayList<>(columnBuilder_batch);
+      for (int i = 0; i < size; i++) {
+        this.tempResult.add(new ArrayList<>(capacity));
+      }
+      this.tempTimestamp = new ArrayList<>(capacity);
 
       this.cacheLines = new ArrayList<CacheLine>(size);
 
@@ -265,15 +301,18 @@ public class InnerParamAlignTableFunction implements TableFunction {
     public void process(List<ColumnBuilder> columnBuilders) {
       try {
         // 初始化查询语句，遍历并缓存所有的 time 和 value
+        // todo：每个测点并行处理 连接池优化 List用数组？
 
         // 攒批判断，若前一个航班未处理完则继续处理
         if (columnBuilder_index < maxLine) {
           int temp_columnBuilder_index = columnBuilder_index;
           for (int i = 0; i < size; i++) {
             columnBuilder_index = temp_columnBuilder_index;
+            List<Float> currentResult = tempResult.get(i);
+            ColumnBuilder currentColumnBuilder = columnBuilders.get(i + 2);
             for (int j = 0; j < columnBuilder_batch; j++) {
               if (columnBuilder_index < maxLine) {
-                columnBuilders.get(i + 2).writeFloat(tempResult.get(i).get(columnBuilder_index));
+                currentColumnBuilder.writeFloat(currentResult.get(columnBuilder_index));
                 columnBuilder_index++;
               } else {
                 break;
@@ -292,7 +331,9 @@ public class InnerParamAlignTableFunction implements TableFunction {
           }
           return;
         } else {
-          tempResult.clear();
+          for (int i = 0; i < size; i++) {
+            tempResult.get(i).clear();
+          }
           tempTimestamp.clear();
           columnBuilder_index = 0;
 
@@ -307,11 +348,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
           return;
         }
 
-        // 重新初始化那一堆list
-        for (int i = 0; i < size; i++) {
-          this.timeList.add(new ArrayList<>());
-          this.valueList.add(new ArrayList<>());
-        }
         for (int i = 0; i < size; i++) {
           rulelCandidator.add(Long.MAX_VALUE);
         }
@@ -332,9 +368,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
         long standardTime = parseTimeToNanos(currentFlightStartTime);
         long endding = parseTimeToNanos(currentFlightEndTime);
         for (int i = 0; i < size; i++) {
-          // flightSqlList.add("select time, value from " + tableNameList[i] + " where
-          // \"aircraft/tail\" = '" + aircraft + "' and time >= " + currentFlightStartTime + " and
-          // time <= " + currentFlightEndTime);
           flightSqlList.add(
               "select time, value from "
                   + tableNameList[i]
@@ -378,14 +411,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
           }
         }
 
-        // 直接从开始时间按照 ruleTime 递增构造对齐结果集，其中，值写入中间对齐结果集 tempResult ，时间直接写入 columnBuilder
-        // List<List<Float>> tempResult = new ArrayList<>(size);
-        for (int i = 0; i < size; i++) {
-          tempResult.add(new ArrayList<>(columnBuilder_batch));
-        }
-
-        List<Iterator<Long>> timeIterators = new ArrayList<>(size);
-        List<Iterator<Float>> valueIterators = new ArrayList<>(size);
+        // 直接从开始时间按照 ruleTime 递增构造对齐结果集，其中，值写入中间对齐结果集 tempResult ，时间写入 tempTimestamp
         for (int i = 0; i < size; i++) {
           timeIterators.add(timeList.get(i).iterator());
           valueIterators.add(valueList.get(i).iterator());
@@ -426,36 +452,49 @@ public class InnerParamAlignTableFunction implements TableFunction {
         switch (fill) {
           case "previous":
             for (int i = 0; i < size; i++) {
+              List<Float> currentResult = tempResult.get(i);
               for (int j = 0; j < maxLine; j++) {
-                Float value = tempResult.get(i).get(j);
+                Float value = currentResult.get(j);
                 if (value != null) {
                   previous_lastValue = value;
                 } else {
-                  tempResult.get(i).set(j, previous_lastValue);
+                  currentResult.set(j, previous_lastValue);
                 }
               }
             }
+            break;
           case "next":
             for (int i = 0; i < size; i++) {
+              List<Float> currentResult = tempResult.get(i);
               for (int j = 0; j < maxLine; j++) {
-                Float value = tempResult.get(i).get(j);
+                Float value = currentResult.get(j);
                 if (value != null) {
                   next_cacheValue = value;
-                  // todo:补充逻辑
+                  while (next_nullCount > 0) {
+                    currentResult.set(j - next_nullCount, value);
+                    next_nullCount--;
+                  }
                 } else {
                   next_nullCount++;
                 }
               }
+              while (next_nullCount > 0) {
+                currentResult.set(maxLine - next_nullCount, next_cacheValue);
+                next_nullCount--;
+              }
             }
+            break;
         }
 
         // 第一次 append columnBuilder
         int temp_columnBuilder_index = columnBuilder_index;
         for (int i = 0; i < size; i++) {
           columnBuilder_index = temp_columnBuilder_index;
+          List<Float> currentResult = tempResult.get(i);
+          ColumnBuilder currentColumnBuilder = columnBuilders.get(i + 2);
           for (int j = 0; j < columnBuilder_batch; j++) {
             if (columnBuilder_index < maxLine) {
-              columnBuilders.get(i + 2).writeFloat(tempResult.get(i).get(columnBuilder_index));
+              currentColumnBuilder.writeFloat(currentResult.get(columnBuilder_index));
               columnBuilder_index++;
             } else {
               break;
@@ -472,35 +511,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
             break;
           }
         }
-
-        // 对包括 time 的全部列的 batch 行进行填充
-        /*        int temp_columnBuilder_index = columnBuilder_index;
-        switch (fill) {
-            case "next":
-              for (int i = 0; i < size; i++) {
-                for (int j = 0; j < columnBuilder_batch; j++) {
-                  if (columnBuilder_index < maxLine) {
-                    Float value = tempResult.get(i).get(columnBuilder_index);
-                    columnBuilder_index++;
-                    if (value != null) {
-                      next_cacheValue = value;
-                      for (int k = 0; k < next_nullCount; k++) {
-                        columnBuilders.get(i + 2).writeFloat(value);
-                      }
-                      columnBuilders.get(i + 2).writeFloat(value);
-                      next_nullCount = 0;
-                    } else {
-                      next_nullCount++;
-                    }
-                  }
-                }
-                // todo：需要处理不同情况下剩余 null 的处理方式
-                for (int k = 0; k < next_nullCount; k++) {
-                  columnBuilders.get(i + 2).writeFloat(next_cacheValue);
-                }
-              }
-              break;
-        }*/
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
       } finally {
@@ -527,8 +537,12 @@ public class InnerParamAlignTableFunction implements TableFunction {
         flightDataSet.clear();
         flightSession.clear();
         rulelCandidator.clear();
-        timeList.clear();
-        valueList.clear();
+        for (int i = 0; i < size; i++) {
+          timeList.get(i).clear();
+          valueList.get(i).clear();
+        }
+        timeIterators.clear();
+        valueIterators.clear();
         cacheLines.clear();
       }
     }
