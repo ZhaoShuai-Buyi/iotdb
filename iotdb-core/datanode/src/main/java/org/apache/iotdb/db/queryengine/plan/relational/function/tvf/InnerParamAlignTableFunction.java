@@ -51,10 +51,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
   private final String LEAVE_LOCATION = "leaveLocation";
   private final String ARRIVE_LOCATION = "arriveLocation";
 
-  // 调试攒批效果
-  private final String COLUMN_BUILDER_BATCH = "columnBuilderBatch";
-  private final String CAPACITY = "capacity";
-
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {
     return Arrays.asList(
@@ -81,16 +77,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
             .name(ARRIVE_LOCATION)
             .type(Type.STRING)
             .defaultValue("null")
-            .build(),
-        ScalarParameterSpecification.builder()
-            .name(COLUMN_BUILDER_BATCH)
-            .type(Type.INT32)
-            .defaultValue(3000)
-            .build(),
-        ScalarParameterSpecification.builder()
-            .name(CAPACITY)
-            .type(Type.INT32)
-            .defaultValue(10000)
             .build());
   }
 
@@ -119,7 +105,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
     if (!alignValidate)
       throw new UDFArgumentNotValidException("alignColumn support default or tableName");
     if (!"previous".equals(fill.getValue()) && !"next".equals(fill.getValue())) {
-      throw new UDFArgumentNotValidException("fill only support previous or next");
+      throw new UDFArgumentNotValidException("fill support previous or next");
     }
 
     // 返回 handle 和构建的结果集信息
@@ -131,10 +117,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
             .addProperty(AIRCRAFT, ((ScalarArgument) arguments.get(AIRCRAFT)).getValue())
             .addProperty(START_TIME, ((ScalarArgument) arguments.get(START_TIME)).getValue())
             .addProperty(END_TIME, ((ScalarArgument) arguments.get(END_TIME)).getValue())
-            .addProperty(
-                COLUMN_BUILDER_BATCH,
-                ((ScalarArgument) arguments.get(COLUMN_BUILDER_BATCH)).getValue())
-            .addProperty(CAPACITY, ((ScalarArgument) arguments.get(CAPACITY)).getValue())
             .build();
 
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
@@ -158,9 +140,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
             (String) handle.getProperty(FILL),
             (String) handle.getProperty(AIRCRAFT),
             (String) handle.getProperty(START_TIME),
-            (String) handle.getProperty(END_TIME),
-            (Integer) handle.getProperty(COLUMN_BUILDER_BATCH),
-            (Integer) handle.getProperty(CAPACITY));
+            (String) handle.getProperty(END_TIME));
       }
     };
   }
@@ -209,7 +189,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
     private Binary aircraftOnly = null;
     private String startTime = null;
     private String endTime = null;
-    private int capacity = 10000;
 
     // 本机地址
     String address = null;
@@ -221,22 +200,21 @@ public class InnerParamAlignTableFunction implements TableFunction {
     private int next_nullCount = 0;
     private float next_cacheValue = 0.0f;
 
+    private long pro_t1 = 0;
+    private long pro_t2 = 0;
+
     ParamAlignProcessor(
         String tableList,
         String alignColumn,
         String fill,
         String aircraft,
         String startTime,
-        String endTime,
-        Integer columnBuilder_batch,
-        Integer capacity) {
+        String endTime) {
       this.fill = fill;
       this.aircraft = aircraft;
       this.aircraftOnly = new Binary(aircraft.getBytes());
       this.startTime = startTime;
       this.endTime = endTime;
-      this.columnBuilder_batch = columnBuilder_batch;
-      this.capacity = capacity;
 
       this.tableNameList = getTableNameList(tableList);
       this.size = this.tableNameList.length;
@@ -250,8 +228,8 @@ public class InnerParamAlignTableFunction implements TableFunction {
       this.timeList = new ArrayList<>(size);
       this.valueList = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
-        this.timeList.add(new ArrayList<>(capacity));
-        this.valueList.add(new ArrayList<>(capacity));
+        this.timeList.add(new ArrayList<>(columnBuilder_batch));
+        this.valueList.add(new ArrayList<>(columnBuilder_batch));
       }
       timeIterators = new ArrayList<>(size);
       valueIterators = new ArrayList<>(size);
@@ -260,9 +238,9 @@ public class InnerParamAlignTableFunction implements TableFunction {
 
       this.tempResult = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
-        this.tempResult.add(new ArrayList<>(capacity));
+        this.tempResult.add(new ArrayList<>(columnBuilder_batch));
       }
-      this.tempTimestamp = new ArrayList<>(capacity);
+      this.tempTimestamp = new ArrayList<>(columnBuilder_batch);
 
       this.cacheLines = new ArrayList<CacheLine>(size);
 
@@ -273,6 +251,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
     @Override
     public void beforeStart() {
       try {
+        long t1 = System.currentTimeMillis();
         // 获取 metadata 迭代器
         flightInfoSession =
             new TableSessionBuilder()
@@ -291,6 +270,19 @@ public class InnerParamAlignTableFunction implements TableFunction {
                     + endTime
                     + "'"); // 后续可选加入地点过滤条件
         flightInfoDataIterator = flightInfoDataSet.iterator();
+
+        // 用同一批 session
+        for (int i = 0; i < size; i++) {
+          flightSession.add(
+              new TableSessionBuilder()
+                  .nodeUrls(Collections.singletonList(address))
+                  .username("root")
+                  .password("root")
+                  .database("b777")
+                  .build());
+        }
+        long t2 = System.currentTimeMillis();
+        System.out.println("before start cost: " + (t2 - t1) + "ms");
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
       }
@@ -301,7 +293,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
     public void process(List<ColumnBuilder> columnBuilders) {
       try {
         // 初始化查询语句，遍历并缓存所有的 time 和 value
-        // todo：每个测点并行处理 连接池优化 List用数组？
 
         // 攒批判断，若前一个航班未处理完则继续处理
         if (columnBuilder_index < maxLine) {
@@ -340,6 +331,9 @@ public class InnerParamAlignTableFunction implements TableFunction {
           previous_lastValue = 0.0f;
           next_nullCount = 0;
           next_cacheValue = 0.0f;
+
+          pro_t2 = System.currentTimeMillis();
+          System.out.println("per aircraft cost: " + (pro_t2 - pro_t1) + "ms");
         }
 
         // 判断是否还有航班
@@ -347,6 +341,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
           finish = true;
           return;
         }
+        pro_t1 = System.currentTimeMillis();
 
         for (int i = 0; i < size; i++) {
           rulelCandidator.add(Long.MAX_VALUE);
@@ -377,13 +372,6 @@ public class InnerParamAlignTableFunction implements TableFunction {
                   + standardTime
                   + " and time <= "
                   + endding);
-          flightSession.add(
-              new TableSessionBuilder()
-                  .nodeUrls(Collections.singletonList(address))
-                  .username("root")
-                  .password("root")
-                  .database("b777")
-                  .build());
           flightDataSet.add(flightSession.get(i).executeQueryStatement(flightSqlList.get(i)));
           flightDataIterator.add(flightDataSet.get(i).iterator());
         }
@@ -522,20 +510,12 @@ public class InnerParamAlignTableFunction implements TableFunction {
               }
             }
           }
-          if (flightSession != null) {
-            for (int i = 0; i < flightSession.size(); i++) {
-              if (flightSession.get(i) != null) {
-                flightSession.get(i).close();
-              }
-            }
-          }
         } catch (IoTDBConnectionException | StatementExecutionException e) {
           throw new RuntimeException(e);
         }
         flightSqlList.clear();
         flightDataIterator.clear();
         flightDataSet.clear();
-        flightSession.clear();
         rulelCandidator.clear();
         for (int i = 0; i < size; i++) {
           timeList.get(i).clear();
@@ -550,6 +530,13 @@ public class InnerParamAlignTableFunction implements TableFunction {
     @Override
     public void beforeDestroy() {
       try {
+        if (flightSession != null) {
+          for (int i = 0; i < flightSession.size(); i++) {
+            if (flightSession.get(i) != null) {
+              flightSession.get(i).close();
+            }
+          }
+        }
         flightInfoDataSet.close();
         flightInfoSession.close();
       } catch (IoTDBConnectionException | StatementExecutionException e) {
