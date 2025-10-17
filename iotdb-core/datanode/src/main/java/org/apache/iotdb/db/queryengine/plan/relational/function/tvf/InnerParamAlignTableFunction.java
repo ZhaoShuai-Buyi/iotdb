@@ -163,14 +163,11 @@ public class InnerParamAlignTableFunction implements TableFunction {
     // 拼接 sql 以及所需参数
     private String[] tableNameList = null;
     private int size = 0;
-    private List<String> flightSqlList = null;
+    // private List<String> flightSqlList = null;
 
     // 时间间隔记录 & time 和 value 列缓存
     private List<ArrayList<Long>> timeList = null;
     private List<ArrayList<Float>> valueList = null;
-    private List<Iterator<Long>> timeIterators = null;
-    private List<Iterator<Float>> valueIterators = null;
-    private List<Long> rulelCandidator = null;
     private int maxLine = 0;
 
     // 单航班中间对齐结果集
@@ -193,15 +190,18 @@ public class InnerParamAlignTableFunction implements TableFunction {
     // 本机地址
     String address = null;
 
-    // fill 攒批相关参数
+    // 攒批相关参数
     private int columnBuilder_batch = 3000;
     private int columnBuilder_index = 0;
-    private float previous_lastValue = 0.0f;
-    private int next_nullCount = 0;
-    private float next_cacheValue = 0.0f;
+
+    // 其他缓存对象
+    private final DateTimeFormatter formatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private long pro_t1 = 0;
     private long pro_t2 = 0;
+    private long append_t1 = 0;
+    private long append_t2 = 0;
 
     ParamAlignProcessor(
         String tableList,
@@ -223,18 +223,12 @@ public class InnerParamAlignTableFunction implements TableFunction {
       this.flightDataSet = new ArrayList<SessionDataSet>(size);
       this.flightDataIterator = new ArrayList<SessionDataSet.DataIterator>(size);
 
-      this.flightSqlList = new ArrayList<String>(size);
-
       this.timeList = new ArrayList<>(size);
       this.valueList = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
         this.timeList.add(new ArrayList<>(columnBuilder_batch));
         this.valueList.add(new ArrayList<>(columnBuilder_batch));
       }
-      timeIterators = new ArrayList<>(size);
-      valueIterators = new ArrayList<>(size);
-
-      this.rulelCandidator = new ArrayList<>(size);
 
       this.tempResult = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
@@ -244,6 +238,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
 
       this.cacheLines = new ArrayList<CacheLine>(size);
 
+      // address 为节点 ip 性能更好，取自配置文件中的 dn_rpc_address
       TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
       address = endPoint.ip + ":" + endPoint.port;
     }
@@ -262,7 +257,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
                 .build();
         flightInfoDataSet =
             flightInfoSession.executeQueryStatement(
-                "select * from flight_metadata where \"aircraft/tail\" = '"
+                "select \"flight/datetime/startrecordingdatetime\", \"flight/datetime/endrecordingdatetime\" from flight_metadata where \"aircraft/tail\" = '"
                     + aircraft
                     + "' and \"flight/datetime/startrecordingdatetime\" >= '"
                     + startTime
@@ -328,11 +323,9 @@ public class InnerParamAlignTableFunction implements TableFunction {
           tempTimestamp.clear();
           columnBuilder_index = 0;
 
-          previous_lastValue = 0.0f;
-          next_nullCount = 0;
-          next_cacheValue = 0.0f;
-
+          append_t2 = System.currentTimeMillis();
           pro_t2 = System.currentTimeMillis();
+          System.out.println("per aircraft append cost: " + (append_t2 - append_t1) + "ms");
           System.out.println("per aircraft cost: " + (pro_t2 - pro_t1) + "ms");
         }
 
@@ -343,27 +336,17 @@ public class InnerParamAlignTableFunction implements TableFunction {
         }
         pro_t1 = System.currentTimeMillis();
 
-        for (int i = 0; i < size; i++) {
-          rulelCandidator.add(Long.MAX_VALUE);
-        }
-
+        long current_t1 = System.currentTimeMillis();
         // 当前航班所有迭代器
-        String currentFlightStartTime =
-            flightInfoDataIterator.getString("flight/datetime/startrecordingdatetime");
-        if (currentFlightStartTime.endsWith("Z")) {
-          currentFlightStartTime =
-              currentFlightStartTime.substring(0, currentFlightStartTime.length() - 1);
-        }
-        String currentFlightEndTime =
-            flightInfoDataIterator.getString("flight/datetime/endrecordingdatetime");
-        if (currentFlightEndTime.endsWith("Z")) {
-          currentFlightEndTime =
-              currentFlightEndTime.substring(0, currentFlightEndTime.length() - 1);
-        }
-        long standardTime = parseTimeToNanos(currentFlightStartTime);
-        long endding = parseTimeToNanos(currentFlightEndTime);
+        String currentFlightStartTime = flightInfoDataIterator.getString(1);
+        currentFlightStartTime =
+            currentFlightStartTime.substring(0, currentFlightStartTime.length() - 1);
+        String currentFlightEndTime = flightInfoDataIterator.getString(2);
+        currentFlightEndTime = currentFlightEndTime.substring(0, currentFlightEndTime.length() - 1);
+        long standardTime = parseTimeToNanos(currentFlightStartTime, formatter);
+        long endding = parseTimeToNanos(currentFlightEndTime, formatter);
         for (int i = 0; i < size; i++) {
-          flightSqlList.add(
+          String flightSQL =
               "select time, value from "
                   + tableNameList[i]
                   + " where \"aircraft/tail\" = '"
@@ -371,82 +354,102 @@ public class InnerParamAlignTableFunction implements TableFunction {
                   + "' and time >= "
                   + standardTime
                   + " and time <= "
-                  + endding);
-          flightDataSet.add(flightSession.get(i).executeQueryStatement(flightSqlList.get(i)));
-          flightDataIterator.add(flightDataSet.get(i).iterator());
+                  + endding;
+          SessionDataSet sessionDataSet = flightSession.get(i).executeQueryStatement(flightSQL);
+          flightDataSet.add(sessionDataSet);
+          flightDataIterator.add(sessionDataSet.iterator());
         }
+        long current_t2 = System.currentTimeMillis();
+        System.out.println("per aircraft current cost: " + (current_t2 - current_t1) + "ms");
 
-        // 初始化 time 和 value 列，找基准列
+        long init_t1 = System.currentTimeMillis();
+        // 初始化 time 和 value 列，找并计算基准列
+        long ruleTime = Long.MAX_VALUE;
         for (int i = 0; i < size; i++) {
+          SessionDataSet.DataIterator dataIterator = flightDataIterator.get(i);
+          ArrayList<Long> colTimeList = timeList.get(i);
+          ArrayList<Float> colValueList = valueList.get(i);
           long last = -1;
-          while (flightDataIterator.get(i).next()) {
-            long cur = flightDataIterator.get(i).getLong("time");
-            float val = flightDataIterator.get(i).getFloat("value");
-            timeList.get(i).add(cur);
-            valueList.get(i).add(val);
-            if (last != -1)
-              rulelCandidator.set(i, Math.min(Math.abs(cur - last), rulelCandidator.get(i)));
+          while (dataIterator.next()) {
+            long cur = dataIterator.getLong("time");
+            float val = dataIterator.getFloat("value");
+            colTimeList.add(cur);
+            colValueList.add(val);
+            if (last != -1) {
+              long diff = Math.abs(cur - last);
+              if (diff < ruleTime) {
+                ruleTime = diff;
+              }
+            }
             last = cur;
           }
         }
+        long init_t2 = System.currentTimeMillis();
+        System.out.println("per aircraft init cost: " + (init_t2 - init_t1) + "ms");
 
-        // 对比 ruleCandidator。找出并计算基准列
-        long ruleTime = Long.MAX_VALUE;
-        for (int i = 0; i < size; i++) {
-          // 等于不交换，只取第一个最高频
-          if (rulelCandidator.get(i) < ruleTime) {
-            ruleTime = rulelCandidator.get(i);
-          }
-        }
-
+        long cache_t1 = System.currentTimeMillis();
         // 直接从开始时间按照 ruleTime 递增构造对齐结果集，其中，值写入中间对齐结果集 tempResult ，时间写入 tempTimestamp
         for (int i = 0; i < size; i++) {
-          timeIterators.add(timeList.get(i).iterator());
-          valueIterators.add(valueList.get(i).iterator());
-          CacheLine cacheLine = new CacheLine(timeIterators.get(i), valueIterators.get(i));
+          CacheLine cacheLine =
+              new CacheLine(timeList.get(i).iterator(), valueList.get(i).iterator());
           cacheLines.add(cacheLine);
           // 初始化第一个数据点
           if (cacheLine.hasNext()) {
             cacheLine.next();
           }
         }
+        long cache_t2 = System.currentTimeMillis();
+        System.out.println("per aircraft cache cost: " + (cache_t2 - cache_t1) + "ms");
 
         // 对齐。补 null
+        long dq_t1 = System.currentTimeMillis();
         while (standardTime <= endding) {
           tempTimestamp.add(standardTime);
-          for (int i = 0; i < size; i++) {
-            if (cacheLines.get(i).hasNext()) {
-              long firstDiff = Math.abs(cacheLines.get(i).getT1() - standardTime);
-              long secondDiff =
-                  cacheLines.get(i).hasNext()
-                      ? Math.abs(cacheLines.get(i).getT2() - standardTime)
-                      : Long.MAX_VALUE;
-              // 貌似除以2更合理
-              if (firstDiff <= secondDiff && firstDiff <= (ruleTime / 2.0)) {
-                tempResult.get(i).add(cacheLines.get(i).getValue1());
-                cacheLines.get(i).next();
-              } else {
-                tempResult.get(i).add(null);
-              }
-            } else {
-              tempResult.get(i).add(cacheLines.get(i).getValue1());
-            }
-          }
           standardTime += ruleTime;
         }
         maxLine = tempTimestamp.size();
+        long halfRuleTime = ruleTime >> 1;
+        Iterator<Long> timeIterator;
+        for (int i = 0; i < size; i++) {
+          CacheLine currentCacheLine = cacheLines.get(i);
+          List<Float> currentTempResult = tempResult.get(i);
+          timeIterator = tempTimestamp.iterator();
+          // todo: currentTempResult 扩容问题
+          while (timeIterator.hasNext()) {
+            long currentTime = timeIterator.next();
+            if (currentCacheLine.hasNext()) {
+              long firstDiff = Math.abs(currentCacheLine.getT1() - currentTime);
+              long secondDiff =
+                  currentCacheLine.hasNext()
+                      ? Math.abs(currentCacheLine.getT2() - currentTime)
+                      : Long.MAX_VALUE;
+              if (firstDiff <= secondDiff && firstDiff <= halfRuleTime) {
+                currentTempResult.add(currentCacheLine.getValue1());
+                currentCacheLine.next();
+              } else {
+                currentTempResult.add(null);
+              }
+            } else {
+              currentTempResult.add(currentCacheLine.getValue1());
+            }
+          }
+        }
+        long dq_t2 = System.currentTimeMillis();
+        System.out.println("per aircraft dq cost: " + (dq_t2 - dq_t1) + "ms");
 
         // fill 全部 null 值
+        long fill_t1 = System.currentTimeMillis();
         switch (fill) {
           case "previous":
             for (int i = 0; i < size; i++) {
               List<Float> currentResult = tempResult.get(i);
+              float lastValue = 0.0f;
               for (int j = 0; j < maxLine; j++) {
                 Float value = currentResult.get(j);
                 if (value != null) {
-                  previous_lastValue = value;
+                  lastValue = value;
                 } else {
-                  currentResult.set(j, previous_lastValue);
+                  currentResult.set(j, lastValue);
                 }
               }
             }
@@ -454,26 +457,22 @@ public class InnerParamAlignTableFunction implements TableFunction {
           case "next":
             for (int i = 0; i < size; i++) {
               List<Float> currentResult = tempResult.get(i);
-              for (int j = 0; j < maxLine; j++) {
+              float lastValue = 0.0f;
+              for (int j = maxLine - 1; j >= 0; j--) {
                 Float value = currentResult.get(j);
                 if (value != null) {
-                  next_cacheValue = value;
-                  while (next_nullCount > 0) {
-                    currentResult.set(j - next_nullCount, value);
-                    next_nullCount--;
-                  }
+                  lastValue = value;
                 } else {
-                  next_nullCount++;
+                  currentResult.set(j, lastValue);
                 }
-              }
-              while (next_nullCount > 0) {
-                currentResult.set(maxLine - next_nullCount, next_cacheValue);
-                next_nullCount--;
               }
             }
             break;
         }
+        long fill_t2 = System.currentTimeMillis();
+        System.out.println("per aircraft fill cost: " + (fill_t2 - fill_t1) + "ms");
 
+        append_t1 = System.currentTimeMillis();
         // 第一次 append columnBuilder
         int temp_columnBuilder_index = columnBuilder_index;
         for (int i = 0; i < size; i++) {
@@ -513,16 +512,12 @@ public class InnerParamAlignTableFunction implements TableFunction {
         } catch (IoTDBConnectionException | StatementExecutionException e) {
           throw new RuntimeException(e);
         }
-        flightSqlList.clear();
         flightDataIterator.clear();
         flightDataSet.clear();
-        rulelCandidator.clear();
         for (int i = 0; i < size; i++) {
           timeList.get(i).clear();
           valueList.get(i).clear();
         }
-        timeIterators.clear();
-        valueIterators.clear();
         cacheLines.clear();
       }
     }
@@ -556,8 +551,7 @@ public class InnerParamAlignTableFunction implements TableFunction {
     return sourceList.split(",");
   }
 
-  private long parseTimeToNanos(String timeStr) {
-    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+  private long parseTimeToNanos(String timeStr, DateTimeFormatter formatter) {
     LocalDateTime dateTime = LocalDateTime.parse(timeStr, formatter);
     return dateTime.toEpochSecond(java.time.ZoneOffset.UTC) * 1000000000L;
   }
