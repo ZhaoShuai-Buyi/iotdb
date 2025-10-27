@@ -11,6 +11,10 @@ import org.apache.iotdb.udf.api.relational.table.specification.ParameterSpecific
 import java.util.List;
 import java.util.Map;
 
+/**
+ * dim_integrity_rate('electric','2025-08-01','all' | 'single')
+ * 数据采集完整性分析
+ */
 public class DimIntegrityRateTableFunction implements TableFunction {
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {

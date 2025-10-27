@@ -11,6 +11,10 @@ import org.apache.iotdb.udf.api.relational.table.specification.ParameterSpecific
 import java.util.List;
 import java.util.Map;
 
+/**
+ * collect_integrity_rate('electric','2025-08-01')
+ * 数据采集成功率分析
+ */
 public class CollectIntegrityRateTableFunction implements TableFunction {
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {

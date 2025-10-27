@@ -11,6 +11,10 @@ import org.apache.iotdb.udf.api.relational.table.specification.ParameterSpecific
 import java.util.List;
 import java.util.Map;
 
+/**
+ * high_user_anomaly_detect(electric,'2025-08-01',1.5)
+ * 高压用户数据一致性分析校验
+ */
 public class HighUserAnomalyDetectTableFunction implements TableFunction {
 
   @Override
