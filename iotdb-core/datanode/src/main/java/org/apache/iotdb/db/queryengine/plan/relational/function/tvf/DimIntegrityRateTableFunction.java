@@ -25,7 +25,6 @@ import org.apache.iotdb.udf.api.type.Type;
 import org.apache.tsfile.block.column.ColumnBuilder;
 import org.apache.tsfile.utils.Binary;
 
-import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -110,7 +109,7 @@ public class DimIntegrityRateTableFunction implements TableFunction {
     public void beforeStart() {
       TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
       String address = endPoint.ip + ":" + endPoint.port;
-      //String afterDate = (LocalDate.parse(date)).plusDays(1).toString();
+      // String afterDate = (LocalDate.parse(date)).plusDays(1).toString();
       sql =
           "select pn_id, count(f1) from "
               + tableName

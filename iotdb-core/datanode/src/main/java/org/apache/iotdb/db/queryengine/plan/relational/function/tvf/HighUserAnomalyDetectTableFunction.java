@@ -21,6 +21,7 @@ import org.apache.iotdb.udf.api.relational.table.processor.TableFunctionLeafProc
 import org.apache.iotdb.udf.api.relational.table.specification.ParameterSpecification;
 import org.apache.iotdb.udf.api.relational.table.specification.ScalarParameterSpecification;
 import org.apache.iotdb.udf.api.type.Type;
+
 import org.apache.tsfile.block.column.ColumnBuilder;
 import org.apache.tsfile.utils.Binary;
 
@@ -44,13 +45,22 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     return Arrays.asList(
         ScalarParameterSpecification.builder().name(TABLE).type(Type.STRING).build(),
         ScalarParameterSpecification.builder().name(DATE).type(Type.STRING).build(),
-        ScalarParameterSpecification.builder().name(K).type(Type.STRING).defaultValue("1.5").build(),
-        ScalarParameterSpecification.builder().name(BM).type(Type.STRING).defaultValue("1").build());
+        ScalarParameterSpecification.builder()
+            .name(K)
+            .type(Type.STRING)
+            .defaultValue("1.5")
+            .build(),
+        ScalarParameterSpecification.builder()
+            .name(BM)
+            .type(Type.STRING)
+            .defaultValue("1")
+            .build());
   }
 
   @Override
   public TableFunctionAnalysis analyze(Map<String, Argument> arguments) throws UDFException {
-    DescribedSchema schema = DescribedSchema.builder()
+    DescribedSchema schema =
+        DescribedSchema.builder()
             .addField("id", Type.STRING)
             .addField("is_healthy", Type.BOOLEAN)
             .addField("reason", Type.STRING)
@@ -62,12 +72,12 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
       throw new UDFArgumentNotValidException("bm support '1' or '2'");
     }
     MapTableFunctionHandle handle =
-            new MapTableFunctionHandle.Builder()
-                    .addProperty(TABLE, ((ScalarArgument) arguments.get(TABLE)).getValue())
-                    .addProperty(DATE, ((ScalarArgument) arguments.get(DATE)).getValue())
-                    .addProperty(K, ((ScalarArgument) arguments.get(K)).getValue())
-                    .addProperty(BM, ((ScalarArgument) arguments.get(BM)).getValue())
-                    .build();
+        new MapTableFunctionHandle.Builder()
+            .addProperty(TABLE, ((ScalarArgument) arguments.get(TABLE)).getValue())
+            .addProperty(DATE, ((ScalarArgument) arguments.get(DATE)).getValue())
+            .addProperty(K, ((ScalarArgument) arguments.get(K)).getValue())
+            .addProperty(BM, ((ScalarArgument) arguments.get(BM)).getValue())
+            .build();
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
   }
 
@@ -84,10 +94,10 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
       public TableFunctionLeafProcessor getSplitProcessor() {
         MapTableFunctionHandle handle = (MapTableFunctionHandle) tableFunctionHandle;
         return new HighUserAnomalyDetectProcessor(
-                (String) handle.getProperty(TABLE),
-                (String) handle.getProperty(DATE),
-                (String) handle.getProperty(K),
-                (String) handle.getProperty(BM));
+            (String) handle.getProperty(TABLE),
+            (String) handle.getProperty(DATE),
+            (String) handle.getProperty(K),
+            (String) handle.getProperty(BM));
       }
     };
   }
@@ -124,34 +134,52 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
       TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
       String address = endPoint.ip + ":" + endPoint.port;
       minusDate = (LocalDate.parse(date)).minusDays(1).toString();
-      String sql1 = "select time ,pn_id, " + bm + " from " + tableName + " where time >= " + date + "T00:00:00 and time < " + date + "T23:59:59 order by pn_id, time asc";
-      String sql2 = "select time ,pn_id, " + bm + " from " + tableName + " where time >= " + minusDate + "T00:00:00 and time < " + minusDate + "T23:59:59 order by pn_id, time asc";
+      String sql1 =
+          "select time ,pn_id, "
+              + bm
+              + " from "
+              + tableName
+              + " where time >= "
+              + date
+              + "T00:00:00 and time < "
+              + date
+              + "T23:59:59 order by pn_id, time asc";
+      String sql2 =
+          "select time ,pn_id, "
+              + bm
+              + " from "
+              + tableName
+              + " where time >= "
+              + minusDate
+              + "T00:00:00 and time < "
+              + minusDate
+              + "T23:59:59 order by pn_id, time asc";
       String sql3 = "select id, rv, cali_cur from document";
       try {
         // query D
         session1 =
-                new TableSessionBuilder()
-                        .nodeUrls(Collections.singletonList(address))
-                        .username("root")
-                        .password("root")
-                        .database("nxgw")
-                        .build();
+            new TableSessionBuilder()
+                .nodeUrls(Collections.singletonList(address))
+                .username("root")
+                .password("root")
+                .database("nxgw")
+                .build();
         // query D-1
         session2 =
-                new TableSessionBuilder()
-                        .nodeUrls(Collections.singletonList(address))
-                        .username("root")
-                        .password("root")
-                        .database("nxgw")
-                        .build();
+            new TableSessionBuilder()
+                .nodeUrls(Collections.singletonList(address))
+                .username("root")
+                .password("root")
+                .database("nxgw")
+                .build();
         // query document
         session3 =
-                new TableSessionBuilder()
-                        .nodeUrls(Collections.singletonList(address))
-                        .username("root")
-                        .password("root")
-                        .database("nxgw")
-                        .build();
+            new TableSessionBuilder()
+                .nodeUrls(Collections.singletonList(address))
+                .username("root")
+                .password("root")
+                .database("nxgw")
+                .build();
         sessionDataSet1 = session1.executeQueryStatement(sql1);
         sessionDataSet2 = session2.executeQueryStatement(sql2);
         sessionDataSet3 = session3.executeQueryStatement(sql3);
@@ -163,7 +191,8 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     @Override
     public void process(List<ColumnBuilder> columnBuilders) {
       try {
-        long stand = LocalDateTime.parse(date + "T00:00:00").toInstant(ZoneOffset.ofHours(8)).toEpochMilli();
+        long stand =
+            LocalDateTime.parse(date + "T00:00:00").toInstant(ZoneOffset.ofHours(8)).toEpochMilli();
         SessionDataSet.DataIterator iterator1 = sessionDataSet1.iterator();
         SessionDataSet.DataIterator iterator2 = sessionDataSet2.iterator();
         SessionDataSet.DataIterator iterator3 = sessionDataSet3.iterator();

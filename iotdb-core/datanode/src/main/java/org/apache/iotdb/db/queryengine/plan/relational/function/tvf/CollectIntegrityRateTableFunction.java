@@ -149,7 +149,8 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
 
     private void processFrozen(List<ColumnBuilder> columnBuilders) {
       try {
-        String frozenSQL = "select pn_id, f1 from " + tableName + " where time = " + date + "T00:00:00";
+        String frozenSQL =
+            "select pn_id, f1 from " + tableName + " where time = " + date + "T00:00:00";
         sessionDataSetFrozen = sessionFrozen.executeQueryStatement(frozenSQL);
         SessionDataSet.DataIterator iterator = sessionDataSetFrozen.iterator();
         long countAll = 0;
