@@ -26,6 +26,7 @@ import org.apache.iotdb.commons.udf.builtin.relational.tvf.SessionTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.TumbleTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.VariationTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.ForecastTableFunction;
+import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.InnerParamAlignPlusTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.InnerParamAlignTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.PatternMatchTableFunction;
 import org.apache.iotdb.udf.api.relational.TableFunction;
@@ -36,62 +37,65 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public enum TableBuiltinTableFunction {
-  TUMBLE("tumble"),
-  HOP("hop"),
-  CUMULATE("cumulate"),
-  SESSION("session"),
-  VARIATION("variation"),
-  CAPACITY("capacity"),
-  FORECAST("forecast"),
-  PATTERN_MATCH("pattern_match"),
-  INNER_PARAM_ALIGN("inner_param_align");
+    TUMBLE("tumble"),
+    HOP("hop"),
+    CUMULATE("cumulate"),
+    SESSION("session"),
+    VARIATION("variation"),
+    CAPACITY("capacity"),
+    FORECAST("forecast"),
+    PATTERN_MATCH("pattern_match"),
+    INNER_PARAM_ALIGN("inner_param_align"),
+    INNER_PARAM_ALIGN_PLUS("inner_param_align_plus");
 
-  private final String functionName;
+    private final String functionName;
 
-  TableBuiltinTableFunction(String functionName) {
-    this.functionName = functionName;
-  }
-
-  public String getFunctionName() {
-    return functionName;
-  }
-
-  private static final Set<String> BUILT_IN_TABLE_FUNCTION_NAME =
-      new HashSet<>(
-          Arrays.stream(TableBuiltinTableFunction.values())
-              .map(TableBuiltinTableFunction::getFunctionName)
-              .collect(Collectors.toList()));
-
-  public static Set<String> getBuiltInTableFunctionName() {
-    return BUILT_IN_TABLE_FUNCTION_NAME;
-  }
-
-  public static boolean isBuiltInTableFunction(String functionName) {
-    return BUILT_IN_TABLE_FUNCTION_NAME.contains(functionName.toLowerCase());
-  }
-
-  public static TableFunction getBuiltinTableFunction(String functionName) {
-    switch (functionName.toLowerCase()) {
-      case "tumble":
-        return new TumbleTableFunction();
-      case "hop":
-        return new HOPTableFunction();
-      case "cumulate":
-        return new CumulateTableFunction();
-      case "session":
-        return new SessionTableFunction();
-      case "variation":
-        return new VariationTableFunction();
-      case "pattern_match":
-        return new PatternMatchTableFunction();
-      case "capacity":
-        return new CapacityTableFunction();
-      case "forecast":
-        return new ForecastTableFunction();
-      case "inner_param_align":
-        return new InnerParamAlignTableFunction();
-      default:
-        throw new UnsupportedOperationException("Unsupported table function: " + functionName);
+    TableBuiltinTableFunction(String functionName) {
+        this.functionName = functionName;
     }
-  }
+
+    public String getFunctionName() {
+        return functionName;
+    }
+
+    private static final Set<String> BUILT_IN_TABLE_FUNCTION_NAME =
+            new HashSet<>(
+                    Arrays.stream(TableBuiltinTableFunction.values())
+                            .map(TableBuiltinTableFunction::getFunctionName)
+                            .collect(Collectors.toList()));
+
+    public static Set<String> getBuiltInTableFunctionName() {
+        return BUILT_IN_TABLE_FUNCTION_NAME;
+    }
+
+    public static boolean isBuiltInTableFunction(String functionName) {
+        return BUILT_IN_TABLE_FUNCTION_NAME.contains(functionName.toLowerCase());
+    }
+
+    public static TableFunction getBuiltinTableFunction(String functionName) {
+        switch (functionName.toLowerCase()) {
+            case "tumble":
+                return new TumbleTableFunction();
+            case "hop":
+                return new HOPTableFunction();
+            case "cumulate":
+                return new CumulateTableFunction();
+            case "session":
+                return new SessionTableFunction();
+            case "variation":
+                return new VariationTableFunction();
+            case "pattern_match":
+                return new PatternMatchTableFunction();
+            case "capacity":
+                return new CapacityTableFunction();
+            case "forecast":
+                return new ForecastTableFunction();
+            case "inner_param_align":
+                return new InnerParamAlignTableFunction();
+            case "inner_param_align_plus":
+                return new InnerParamAlignPlusTableFunction();
+            default:
+                throw new UnsupportedOperationException("Unsupported table function: " + functionName);
+        }
+    }
 }
