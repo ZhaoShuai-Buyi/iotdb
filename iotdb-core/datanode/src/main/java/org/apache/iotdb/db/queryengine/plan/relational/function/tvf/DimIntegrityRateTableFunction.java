@@ -124,7 +124,7 @@ public class DimIntegrityRateTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
       } catch (IoTDBConnectionException e) {
         System.out.println(e.getMessage());

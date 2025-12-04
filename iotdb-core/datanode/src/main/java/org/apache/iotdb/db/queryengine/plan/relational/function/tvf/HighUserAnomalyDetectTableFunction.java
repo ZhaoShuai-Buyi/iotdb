@@ -27,12 +27,12 @@ import org.apache.tsfile.utils.Binary;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/** high_user_anomaly_detect('electric','2025-08-01',1.5, '1') 高压用户数据一致性分析校验 */
+/** high_user_anomaly_detect('electric','2025-08-01','1.5', '1') 高压用户数据一致性分析校验 */
 public class HighUserAnomalyDetectTableFunction implements TableFunction {
 
   private final String TABLE = "table";
@@ -106,9 +106,12 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     private String tableName;
     private String date;
     private String minusDate;
-    private Float standRl;
+    private long minusDateStartTimestamp = 0L;
+    private long minusDateEndTimestamp = 0L;
+    private Float k;
     private Map<String, Float> allDocumentMap = new HashMap<>();
     private String bm;
+    private final int line = 96;
     private boolean isFinish = false;
     private ITableSession session1;
     private ITableSession session2;
@@ -125,7 +128,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     HighUserAnomalyDetectProcessor(String tableName, String date, String k, String bm) {
       this.tableName = tableName;
       this.date = date;
-      this.standRl = Float.parseFloat(k) * 24;
+      this.k = Float.parseFloat(k);
       this.bm = "f" + bm;
     }
 
@@ -134,27 +137,13 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
       TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
       String address = endPoint.ip + ":" + endPoint.port;
       minusDate = (LocalDate.parse(date)).minusDays(1).toString();
-      String sql1 =
-          "select time ,pn_id, "
-              + bm
-              + " from "
-              + tableName
-              + " where time >= "
-              + date
-              + "T00:00:00 and time < "
-              + date
-              + "T23:59:59 order by pn_id, time asc";
-      String sql2 =
-          "select time ,pn_id, "
-              + bm
-              + " from "
-              + tableName
-              + " where time >= "
-              + minusDate
-              + "T00:00:00 and time < "
-              + minusDate
-              + "T23:59:59 order by pn_id, time asc";
-      String sql3 = "select id, rv, cali_cur from document";
+      DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+      ZoneId beijingZone = ZoneId.of("Asia/Shanghai");
+      minusDateStartTimestamp = LocalDateTime.parse(minusDate + "T00:00:00", formatter).atZone(beijingZone).toInstant().toEpochMilli();
+      minusDateEndTimestamp = LocalDateTime.parse(minusDate + "T23:45:00", formatter).atZone(beijingZone).toInstant().toEpochMilli();
+      String sql1 = getGapfillSQL(bm, tableName, date);
+      String sql2 = getGapfillSQL(bm, tableName, minusDate);
+      String sql3 = "select id, rl from document";
       try {
         // query D
         session1 =
@@ -162,7 +151,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
         // query D-1
         session2 =
@@ -170,7 +159,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
         // query document
         session3 =
@@ -178,7 +167,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
         sessionDataSet1 = session1.executeQueryStatement(sql1);
         sessionDataSet2 = session2.executeQueryStatement(sql2);
@@ -197,56 +186,112 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
         SessionDataSet.DataIterator iterator2 = sessionDataSet2.iterator();
         SessionDataSet.DataIterator iterator3 = sessionDataSet3.iterator();
         while (iterator3.next()) {
-          Float rv = 100.0f; // todo: update how to get voltage
-          Matcher m = Pattern.compile("[（(]\\s*(\\d+)\\s*[)）]").matcher(iterator3.getString(3));
-          Float caliCur = Float.parseFloat(m.find() ? m.group(1) : "0.0");
-          allDocumentMap.put(iterator3.getString(1), standRl * rv * caliCur);
+          allDocumentMap.put(iterator3.getString(1), k * Float.parseFloat(iterator3.getString(2)));
         }
-        Float rl = standRl;
-        String id = "";
-        Binary idBinary = null;
-        Float cacheValue = 0.0f;
-        while (iterator1.next() && iterator2.next()) {
-          long currentTime = iterator1.getLong(1);
-          Float currentValue1 = iterator1.getFloat(3);
-          Float currentValue2 = iterator2.getFloat(3);
-          // 判断为零点则更换设备，也就要更换用户容量，并且重置 cacheValue
-          if (currentTime == stand) {
-            id = iterator1.getString(2);
-            idBinary = new Binary(id.getBytes());
-            rl = allDocumentMap.get(id);
-            cacheValue = 0.0f;
-            if (rl != null && currentValue1 - currentValue2 >= rl) {
-              columnBuilders.get(0).writeBinary(idBinary);
-              columnBuilders.get(1).writeBoolean(false);
-              columnBuilders.get(2).writeBinary(DetectYestAllException);
-              columnBuilders.get(3).writeBinary(new Binary((minusDate + "T00:00:00").getBytes()));
-              columnBuilders.get(4).writeBinary(new Binary((minusDate + "T23:45:00").getBytes()));
+        Float rl = null;
+        String id1 = null;
+        String id2 = null;
+        Binary id1Binary = null;
+        Float cacheValue = 0.0F;
+        boolean hasNext1 = iterator1.next();
+        boolean hasNext2 = iterator2.next();
+        if (hasNext1) {
+          id1 = iterator1.getString(1);
+          id1Binary = new Binary(id1.getBytes());
+        }
+        int count = 0;
+
+        while (hasNext1 || hasNext2) {
+          if (hasNext1) {
+            id1 = iterator1.getString(1);
+            if (count >= line) {
+              count = 0;
+              id1Binary = new Binary(id1.getBytes());
+              cacheValue = 0.0f;
             }
           }
-          if (iterator1.isNull(3)) {
-            columnBuilders.get(0).writeBinary(idBinary);
-            columnBuilders.get(1).writeBoolean(false);
-            columnBuilders.get(2).writeBinary(DetectNullException);
-            columnBuilders.get(3).writeLong(currentTime);
-            columnBuilders.get(4).writeLong(currentTime);
-            continue;
+          if (hasNext2) {
+            id2 = iterator2.getString(1);
           }
-          if (currentValue1 - currentValue2 < 0) {
-            columnBuilders.get(0).writeBinary(idBinary);
-            columnBuilders.get(1).writeBoolean(false);
-            columnBuilders.get(2).writeBinary(DetectSameTimePointDataException);
-            columnBuilders.get(3).writeLong(currentTime);
-            columnBuilders.get(4).writeLong(currentTime);
+          long compareResult = 0;
+          if (hasNext1 && hasNext2) {
+            compareResult = compareId(id1, id2);
+          } else if (hasNext1) {
+            compareResult = -1;
+          } else {
+            compareResult = 1;
           }
-          if (currentValue1 - cacheValue < 0) {
-            columnBuilders.get(0).writeBinary(idBinary);
-            columnBuilders.get(1).writeBoolean(false);
-            columnBuilders.get(2).writeBinary(DetectNegativeException);
-            columnBuilders.get(3).writeLong(currentTime);
-            columnBuilders.get(4).writeLong(currentTime);
+          if (compareResult < 0) {
+            // iterator1 正常研判当天的异常情况
+            long currentTime = iterator1.getLong(2);
+            if (iterator1.isNull(3)) {
+              columnBuilders.get(0).writeBinary(id1Binary);
+              columnBuilders.get(1).writeBoolean(false);
+              columnBuilders.get(2).writeBinary(DetectNullException);
+              columnBuilders.get(3).writeLong(currentTime);
+              columnBuilders.get(4).writeLong(currentTime);
+            } else {
+              Float currentValue = iterator1.getFloat(3);
+              if (currentValue - cacheValue < 0) {
+                columnBuilders.get(0).writeBinary(id1Binary);
+                columnBuilders.get(1).writeBoolean(false);
+                columnBuilders.get(2).writeBinary(DetectNegativeException);
+                columnBuilders.get(3).writeLong(currentTime);
+                columnBuilders.get(4).writeLong(currentTime);
+              }
+              cacheValue = currentValue;
+            }
+            count++;
+            hasNext1 = iterator1.next();
+          } else if (compareResult > 0) {
+            // iterator2 直接遍历一组数据
+            for (int i = 0; i < line; i++) {
+              hasNext2 = iterator2.next();
+            }
+          } else {
+            // 正常执行 pn_id 与 time 相同时的异常识别
+            try {
+              rl = allDocumentMap.get(id1);
+            } catch (Exception e) {
+              rl = null;
+            }
+            long currentTime = iterator1.getLong(2);
+            float currentValue1 = iterator1.getFloat(3);
+            float currentValue2 = iterator2.getFloat(3);
+            if (rl != null && currentValue1 - currentValue2 >= rl) {
+              columnBuilders.get(0).writeBinary(id1Binary);
+              columnBuilders.get(1).writeBoolean(false);
+              columnBuilders.get(2).writeBinary(DetectYestAllException);
+              columnBuilders.get(3).writeLong(minusDateStartTimestamp);
+              columnBuilders.get(4).writeLong(minusDateEndTimestamp);
+            }
+            if (iterator1.isNull(3)) {
+              columnBuilders.get(0).writeBinary(id1Binary);
+              columnBuilders.get(1).writeBoolean(false);
+              columnBuilders.get(2).writeBinary(DetectNullException);
+              columnBuilders.get(3).writeLong(currentTime);
+              columnBuilders.get(4).writeLong(currentTime);
+            } else {
+              if (currentValue1 - currentValue2 < 0) {
+                columnBuilders.get(0).writeBinary(id1Binary);
+                columnBuilders.get(1).writeBoolean(false);
+                columnBuilders.get(2).writeBinary(DetectSameTimePointDataException);
+                columnBuilders.get(3).writeLong(currentTime);
+                columnBuilders.get(4).writeLong(currentTime);
+              }
+              if (currentValue1 - cacheValue < 0) {
+                columnBuilders.get(0).writeBinary(id1Binary);
+                columnBuilders.get(1).writeBoolean(false);
+                columnBuilders.get(2).writeBinary(DetectNegativeException);
+                columnBuilders.get(3).writeLong(currentTime);
+                columnBuilders.get(4).writeLong(currentTime);
+              }
+              cacheValue = currentValue1;
+            }
+            hasNext1 = iterator1.next();
+            hasNext2 = iterator2.next();
+            count++;
           }
-          cacheValue = currentValue1;
         }
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         System.out.println(e.getMessage());
@@ -285,5 +330,23 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
         System.out.println(e.getMessage());
       }
     }
+  }
+
+  public String getGapfillSQL(String bm, String tableName, String date) {
+    return "select pn_id, date_bin_gapfill(15m, time), last("
+            + bm
+            + ") from "
+            + tableName
+            + " where time >= "
+            + date
+            + "T00:00:00 and time < "
+            + date
+            + "T23:59:59 group by 1,2";
+  }
+
+  public long compareId(String id1, String id2) {
+    long num1 = Long.parseLong(id1);
+    long num2 = Long.parseLong(id2);
+    return Long.compare(num1, num2);
   }
 }

@@ -79,10 +79,13 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
   private class CollectIntegrityRateProcessor implements TableFunctionLeafProcessor {
     private String tableName;
     private String date;
+    private long countAll;
     private ITableSession sessionFrozen;
     private ITableSession sessionLoaded;
+    private ITableSession sessionCount;
     private SessionDataSet sessionDataSetFrozen;
     private SessionDataSet sessionDataSetLoaded;
+    private SessionDataSet sessionDataSetCount;
     private boolean isFinish = false;
 
     CollectIntegrityRateProcessor(String tableName, String date) {
@@ -100,15 +103,22 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
         sessionLoaded =
             new TableSessionBuilder()
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nxgw")
+                .database("nx")
                 .build();
+        sessionCount =
+                new TableSessionBuilder()
+                        .nodeUrls(Collections.singletonList(address))
+                        .username("root")
+                        .password("root")
+                        .database("nx")
+                        .build();
       } catch (IoTDBConnectionException e) {
         System.out.println(e.getMessage());
       }
@@ -117,6 +127,16 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
     @Override
     public void process(List<ColumnBuilder> columnBuilders) {
       columnBuilders.get(0).writeBinary(new Binary(date.getBytes()));
+      try {
+        String countSql = "select distinct(pn_id) from " + tableName;
+        sessionDataSetCount = sessionCount.executeQueryStatement(countSql);
+        SessionDataSet.DataIterator iterator = sessionDataSetCount.iterator();
+        while (iterator.next()) {
+          countAll++;
+        }
+      } catch (IoTDBConnectionException | StatementExecutionException e) {
+        System.out.println(e.getMessage());
+      }
       processFrozen(columnBuilders);
       processLoad(columnBuilders);
       isFinish = true;
@@ -136,11 +156,17 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
         if (sessionDataSetFrozen != null) {
           sessionDataSetFrozen.close();
         }
+        if (sessionDataSetCount != null) {
+          sessionDataSetCount.close();
+        }
         if (sessionLoaded != null) {
           sessionLoaded.close();
         }
         if (sessionFrozen != null) {
           sessionFrozen.close();
+        }
+        if (sessionCount != null) {
+          sessionCount.close();
         }
       } catch (Exception e) {
         System.out.println(e.getMessage());
@@ -153,10 +179,8 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
             "select pn_id, f1 from " + tableName + " where time = " + date + "T00:00:00";
         sessionDataSetFrozen = sessionFrozen.executeQueryStatement(frozenSQL);
         SessionDataSet.DataIterator iterator = sessionDataSetFrozen.iterator();
-        long countAll = 0;
         long countTarget = 0;
         while (iterator.next()) {
-          countAll++;
           if (!iterator.isNull("f1")) {
             countTarget++;
           } else {
@@ -182,10 +206,8 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
                 + "T23:59:59 group by pn_id";
         sessionDataSetLoaded = sessionLoaded.executeQueryStatement(loadedSQL);
         SessionDataSet.DataIterator iterator = sessionDataSetLoaded.iterator();
-        long countAll = 0;
         long countTarget = 0;
         while (iterator.next()) {
-          countAll++;
           if (iterator.getInt(1) > 90) {
             countTarget++;
           }

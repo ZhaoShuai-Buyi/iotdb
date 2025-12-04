@@ -400,3 +400,41 @@ server 可以使用 "ctrl-C" 或者执行下面的脚本:
 * https://join.slack.com/t/apacheiotdb/shared_invite/zt-qvso1nj8-7715TpySZtZqmyG5qXQwpg
 
 获取更多内容，请查看 [加入社区](https://github.com/apache/iotdb/issues/1995) 
+
+# nxgw 函数
+
+## 高压用户数据一致性分析校验
+
+前置条件：场站数据、档案数据入库完成
+
+查询命令：select * from high_user_anomaly_detect('electric','2025-08-01','1.5', '1')
+
+参数：电表、查询日期、倍率K、使用字段（1为使用正向有功电能量，2为使用反向有功电能量）
+
+查询结果：id为电表ID，is_healthy为false代表数据异常，reason为异常原因，window_start和window_end共同组成异常数据的时间点或范围
+
+![img.png](img.png)
+
+## 数据采集成功率分析
+
+前置条件：场站数据入库完成
+
+查询命令：select * from collect_integrity_rate('electric','2025-08-01')
+
+参数：电表、查询日期
+
+查询结果：date为查询日期，frozen_success_rate为日冻结电量采集成功率，load_success_rate为日负荷曲线采集成功率
+
+![img_1.png](img_1.png)
+
+## 数据采集完整性分析
+
+前置条件：场站数据入库完成
+
+查询命令：select * from dim_integrity_rate('electric','2025-08-01','all')
+
+参数：电表、查询日期，查询维度（all为查询全部电表完整性，single为分别查询单个电表完整性）
+
+查询结果：method为查询维度，completeness_rate为完整率，entity在single模式下为电表ID，entity在all模式下只会打印all
+
+![img_2.png](img_2.png)
