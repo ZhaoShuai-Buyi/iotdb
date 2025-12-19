@@ -29,17 +29,19 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/** collect_integrity_rate('electric','2025-08-01') 数据采集成功率分析 */
+/** collect_integrity_rate('electric','2025-08-01', 'nx') 数据采集成功率分析 */
 public class CollectIntegrityRateTableFunction implements TableFunction {
 
   private final String TABLE = "table";
   private final String DATE = "date";
+  private final String DB = "db";
 
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {
     return Arrays.asList(
         ScalarParameterSpecification.builder().name(TABLE).type(Type.STRING).build(),
-        ScalarParameterSpecification.builder().name(DATE).type(Type.STRING).build());
+        ScalarParameterSpecification.builder().name(DATE).type(Type.STRING).build(),
+            ScalarParameterSpecification.builder().name(DB).type(Type.STRING).defaultValue("nxgw").build());
   }
 
   @Override
@@ -54,6 +56,7 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
         new MapTableFunctionHandle.Builder()
             .addProperty(TABLE, ((ScalarArgument) arguments.get(TABLE)).getValue())
             .addProperty(DATE, ((ScalarArgument) arguments.get(DATE)).getValue())
+                .addProperty(DB, ((ScalarArgument) arguments.get(DB)).getValue())
             .build();
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
   }
@@ -71,7 +74,8 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
       public TableFunctionLeafProcessor getSplitProcessor() {
         MapTableFunctionHandle handle = (MapTableFunctionHandle) tableFunctionHandle;
         return new CollectIntegrityRateProcessor(
-            (String) handle.getProperty(TABLE), (String) handle.getProperty(DATE));
+            (String) handle.getProperty(TABLE), (String) handle.getProperty(DATE),
+                (String) handle.getProperty(DB));
       }
     };
   }
@@ -79,6 +83,7 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
   private class CollectIntegrityRateProcessor implements TableFunctionLeafProcessor {
     private String tableName;
     private String date;
+    private String db;
     private long countAll;
     private ITableSession sessionFrozen;
     private ITableSession sessionLoaded;
@@ -88,9 +93,10 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
     private SessionDataSet sessionDataSetCount;
     private boolean isFinish = false;
 
-    CollectIntegrityRateProcessor(String tableName, String date) {
+    CollectIntegrityRateProcessor(String tableName, String date, String db) {
       this.tableName = tableName;
       this.date = date;
+      this.db = db;
     }
 
     @Override
@@ -103,21 +109,21 @@ public class CollectIntegrityRateTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
         sessionLoaded =
             new TableSessionBuilder()
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
         sessionCount =
                 new TableSessionBuilder()
                         .nodeUrls(Collections.singletonList(address))
                         .username("root")
                         .password("root")
-                        .database("nx")
+                        .database(db)
                         .build();
       } catch (IoTDBConnectionException e) {
         System.out.println(e.getMessage());

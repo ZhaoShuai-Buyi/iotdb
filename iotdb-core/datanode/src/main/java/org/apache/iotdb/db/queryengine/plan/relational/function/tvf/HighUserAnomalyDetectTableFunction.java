@@ -32,13 +32,14 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
-/** high_user_anomaly_detect('electric','2025-08-01','1.5', '1') 高压用户数据一致性分析校验 */
+/** high_user_anomaly_detect('electric','2025-08-01','1.5', '1', 'nx') 高压用户数据一致性分析校验 */
 public class HighUserAnomalyDetectTableFunction implements TableFunction {
 
   private final String TABLE = "table";
   private final String DATE = "date";
   private final String K = "k";
   private final String BM = "bm";
+  private final String DB = "db";
 
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {
@@ -54,6 +55,11 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
             .name(BM)
             .type(Type.STRING)
             .defaultValue("1")
+            .build(),
+    ScalarParameterSpecification.builder()
+            .name(DB)
+            .type(Type.STRING)
+            .defaultValue("nxgw")
             .build());
   }
 
@@ -77,6 +83,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
             .addProperty(DATE, ((ScalarArgument) arguments.get(DATE)).getValue())
             .addProperty(K, ((ScalarArgument) arguments.get(K)).getValue())
             .addProperty(BM, ((ScalarArgument) arguments.get(BM)).getValue())
+                .addProperty(DB, ((ScalarArgument) arguments.get(DB)).getValue())
             .build();
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
   }
@@ -97,7 +104,8 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
             (String) handle.getProperty(TABLE),
             (String) handle.getProperty(DATE),
             (String) handle.getProperty(K),
-            (String) handle.getProperty(BM));
+            (String) handle.getProperty(BM),
+                (String) handle.getProperty(DB));
       }
     };
   }
@@ -111,6 +119,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     private Float k;
     private Map<String, Float> allDocumentMap = new HashMap<>();
     private String bm;
+    private String db;
     private final int line = 96;
     private boolean isFinish = false;
     private ITableSession session1;
@@ -125,11 +134,12 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
     private final Binary DetectSameTimePointDataException = new Binary("同时间点数据异常".getBytes());
     private final Binary DetectYestAllException = new Binary("昨日全部数据异常".getBytes());
 
-    HighUserAnomalyDetectProcessor(String tableName, String date, String k, String bm) {
+    HighUserAnomalyDetectProcessor(String tableName, String date, String k, String bm, String db) {
       this.tableName = tableName;
       this.date = date;
       this.k = Float.parseFloat(k);
       this.bm = "f" + bm;
+      this.db = db;
     }
 
     @Override
@@ -151,7 +161,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
         // query D-1
         session2 =
@@ -159,7 +169,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
         // query document
         session3 =
@@ -167,7 +177,7 @@ public class HighUserAnomalyDetectTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
         sessionDataSet1 = session1.executeQueryStatement(sql1);
         sessionDataSet2 = session2.executeQueryStatement(sql2);

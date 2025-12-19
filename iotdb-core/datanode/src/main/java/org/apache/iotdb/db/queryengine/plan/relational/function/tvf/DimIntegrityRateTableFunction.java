@@ -30,12 +30,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/** dim_integrity_rate('electric','2025-08-01','all' | 'single') 数据采集完整性分析 */
+/** dim_integrity_rate('electric','2025-08-01','all' | 'single', 'nx') 数据采集完整性分析 */
 public class DimIntegrityRateTableFunction implements TableFunction {
 
   private final String TABLE = "table";
   private final String DATE = "date";
   private final String METHOD = "method";
+  private final String DB = "db";
+
 
   @Override
   public List<ParameterSpecification> getArgumentsSpecifications() {
@@ -46,7 +48,8 @@ public class DimIntegrityRateTableFunction implements TableFunction {
             .name(METHOD)
             .type(Type.STRING)
             .defaultValue("all")
-            .build());
+            .build(),
+            ScalarParameterSpecification.builder().name(DB).type(Type.STRING).defaultValue("nxgw").build());
   }
 
   @Override
@@ -66,6 +69,7 @@ public class DimIntegrityRateTableFunction implements TableFunction {
             .addProperty(TABLE, ((ScalarArgument) arguments.get(TABLE)).getValue())
             .addProperty(DATE, ((ScalarArgument) arguments.get(DATE)).getValue())
             .addProperty(METHOD, ((ScalarArgument) arguments.get(METHOD)).getValue())
+                .addProperty(DB, ((ScalarArgument) arguments.get(DB)).getValue())
             .build();
     return TableFunctionAnalysis.builder().properColumnSchema(schema).handle(handle).build();
   }
@@ -85,7 +89,8 @@ public class DimIntegrityRateTableFunction implements TableFunction {
         return new DimIntegrityRateProcessor(
             (String) handle.getProperty(TABLE),
             (String) handle.getProperty(DATE),
-            (String) handle.getProperty(METHOD));
+            (String) handle.getProperty(METHOD),
+        (String) handle.getProperty(DB));
       }
     };
   }
@@ -94,22 +99,23 @@ public class DimIntegrityRateTableFunction implements TableFunction {
     private String method;
     private String tableName;
     private String date;
+    private String db;
     private ITableSession session;
     private SessionDataSet sessionDataSet;
     private String sql;
     private boolean isFinish = false;
 
-    DimIntegrityRateProcessor(String tableName, String date, String method) {
+    DimIntegrityRateProcessor(String tableName, String date, String method, String db) {
       this.method = method;
       this.tableName = tableName;
       this.date = date;
+      this.db = db;
     }
 
     @Override
     public void beforeStart() {
       TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
       String address = endPoint.ip + ":" + endPoint.port;
-      // String afterDate = (LocalDate.parse(date)).plusDays(1).toString();
       sql =
           "select pn_id, count(f1) from "
               + tableName
@@ -124,7 +130,7 @@ public class DimIntegrityRateTableFunction implements TableFunction {
                 .nodeUrls(Collections.singletonList(address))
                 .username("root")
                 .password("root")
-                .database("nx")
+                .database(db)
                 .build();
       } catch (IoTDBConnectionException e) {
         System.out.println(e.getMessage());
