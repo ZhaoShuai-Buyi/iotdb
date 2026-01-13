@@ -46,7 +46,8 @@ public enum TableBuiltinTableFunction {
   FORECAST("forecast"),
   PATTERN_MATCH("pattern_match"),
   CLASSIFY("classify"),
-  DETECT_BLEED("detect_bleed"),;
+  DETECT_BLEED("detect_bleed"),
+  ;
 
   private final String functionName;
 
