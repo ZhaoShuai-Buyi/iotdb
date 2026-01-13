@@ -27,6 +27,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * select * form detect_bleed();
+ */
 public class DetectBleedTableFunction implements TableFunction {
 
   @Override
@@ -121,22 +124,22 @@ public class DetectBleedTableFunction implements TableFunction {
       List<Float> pack2_status = new ArrayList<>();
       try {
         while (sourceDataIterator.get(2).next()) {
-          phase_data.add(sourceDataIterator.get(2).getFloat(3));
+          phase_data.add(sourceDataIterator.get(2).getFloat(2));
           for (int i = 0; i < 4; i++) {
             sourceDataIterator.get(0).next();
             sourceDataIterator.get(1).next();
             sourceDataIterator.get(3).next();
             sourceDataIterator.get(4).next();
-            precool_1.add(sourceDataIterator.get(0).getFloat(3));
-            precool_2.add(sourceDataIterator.get(1).getFloat(3));
+            precool_1.add(sourceDataIterator.get(0).getFloat(2));
+            precool_2.add(sourceDataIterator.get(1).getFloat(2));
             time_data.add(sourceDataIterator.get(1).getLong(1));
-            pack1_status.add(sourceDataIterator.get(3).getFloat(3));
-            pack2_status.add(sourceDataIterator.get(4).getFloat(3));
+            pack1_status.add(sourceDataIterator.get(3).getFloat(2));
+            pack2_status.add(sourceDataIterator.get(4).getFloat(2));
           }
         }
 
         // 第一阶段：数据预处理
-        for (int idx = 0; idx < precool_1.size(); idx++) {
+        for (int idx = 4; idx < precool_1.size(); idx++) {
           int phaseIdx = idx / 4;
 
           // 边界检查
@@ -163,6 +166,8 @@ public class DetectBleedTableFunction implements TableFunction {
             diffCache2.add(findMaxValue(window2) - findMinValue(window2));
           }
         }
+
+        System.out.println("diff_cache length: " + diffCache1.size());
 
         // 第二阶段：波动分析
         if (diffCache1.size() > 60) {
@@ -192,7 +197,10 @@ public class DetectBleedTableFunction implements TableFunction {
 
           // 计算平均波动值
           float avg1 = total1 / diffCache1.size();
-          float avg2 = total2 / diffCache2.size();
+          float avg2 = total2 / diffCache1.size();
+
+          System.out.println("avg1: " + avg1);
+          System.out.println("avg2: " + avg2);
 
           // 事件生成逻辑
           if (avg1 <= 1.0 && avg2 <= 1.0) {
@@ -208,8 +216,7 @@ public class DetectBleedTableFunction implements TableFunction {
             if (avg1 > 1.0) {
               columnBuilders.get(3).writeBinary(new Binary("左侧".getBytes()));
               columnBuilders.get(4).writeFloat(Math.round(avg1 * 100.0) / 100.0f);
-            }
-            if (avg2 > 1.0) {
+            } else if (avg2 > 1.0) {
               columnBuilders.get(3).writeBinary(new Binary("右侧".getBytes()));
               columnBuilders.get(4).writeFloat(Math.round(avg2 * 100.0) / 100.0f);
             }
@@ -248,6 +255,9 @@ public class DetectBleedTableFunction implements TableFunction {
   }
 
   public static float findMinValue(List<Float> values) {
+    if (values == null || values.size() == 0) {
+      return 0.0f;
+    }
     float minValue = values.get(0);
     for (int i = 1; i < values.size(); i++) {
       if (values.get(i) < minValue) {
@@ -258,6 +268,9 @@ public class DetectBleedTableFunction implements TableFunction {
   }
 
   public static float findMaxValue(List<Float> values) {
+    if (values == null || values.size() == 0) {
+      return 0.0f;
+    }
     float maxValue = values.get(0);
     for (int i = 1; i < values.size(); i++) {
       if (values.get(i) > maxValue) {
