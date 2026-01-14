@@ -1,12 +1,18 @@
 package org.apache.iotdb.db.queryengine.plan.relational.function.tvf;
 
-import org.apache.iotdb.common.rpc.thrift.TEndPoint;
-import org.apache.iotdb.db.conf.IoTDBDescriptor;
-import org.apache.iotdb.isession.ITableSession;
-import org.apache.iotdb.isession.SessionDataSet;
-import org.apache.iotdb.rpc.IoTDBConnectionException;
-import org.apache.iotdb.rpc.StatementExecutionException;
-import org.apache.iotdb.session.TableSessionBuilder;
+import org.apache.iotdb.commons.conf.IoTDBConstant;
+import org.apache.iotdb.commons.exception.IoTDBException;
+import org.apache.iotdb.db.protocol.session.IClientSession;
+import org.apache.iotdb.db.protocol.session.InternalClientSession;
+import org.apache.iotdb.db.protocol.session.SessionManager;
+import org.apache.iotdb.db.queryengine.plan.Coordinator;
+import org.apache.iotdb.db.queryengine.plan.execution.ExecutionResult;
+import org.apache.iotdb.db.queryengine.plan.execution.IQueryExecution;
+import org.apache.iotdb.db.queryengine.plan.planner.LocalExecutionPlanner;
+import org.apache.iotdb.db.queryengine.plan.relational.metadata.Metadata;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Statement;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.parser.SqlParser;
+import org.apache.iotdb.rpc.TSStatusCode;
 import org.apache.iotdb.udf.api.exception.UDFException;
 import org.apache.iotdb.udf.api.relational.TableFunction;
 import org.apache.iotdb.udf.api.relational.table.MapTableFunctionHandle;
@@ -19,13 +25,13 @@ import org.apache.iotdb.udf.api.relational.table.processor.TableFunctionLeafProc
 import org.apache.iotdb.udf.api.relational.table.specification.ParameterSpecification;
 import org.apache.iotdb.udf.api.type.Type;
 
+import org.apache.tsfile.block.column.Column;
 import org.apache.tsfile.block.column.ColumnBuilder;
+import org.apache.tsfile.read.common.block.TsBlock;
 import org.apache.tsfile.utils.Binary;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.time.ZoneId;
+import java.util.*;
 
 /** select * form detect_bleed(); */
 public class DetectBleedTableFunction implements TableFunction {
@@ -68,7 +74,11 @@ public class DetectBleedTableFunction implements TableFunction {
   private class BleedProcessor implements TableFunctionLeafProcessor {
     List<String> sqlList = null;
 
-    ITableSession sourceSession = null;
+    IClientSession internalSession = null;
+    Coordinator coordinator = Coordinator.getInstance();
+    SessionManager sessionManager = SessionManager.getInstance();
+    Metadata metadata = LocalExecutionPlanner.getInstance().metadata;
+    SqlParser sqlParser = new SqlParser();
 
     List<Float> precool_1 = new ArrayList<>(17200);
     List<Float> precool_2 = new ArrayList<>(17200);
@@ -84,7 +94,7 @@ public class DetectBleedTableFunction implements TableFunction {
 
     BleedProcessor() {
       sqlList = new ArrayList<>();
-      sqlList.add("select time, value from precool_press1");
+      sqlList.add("select time, value from my_precool_press1");
       sqlList.add("select time, value from precool_press2");
       sqlList.add("select time, value from phase1");
       sqlList.add("select time, value from pack1_pb");
@@ -93,65 +103,94 @@ public class DetectBleedTableFunction implements TableFunction {
       diffCache2 = new ArrayList<>();
     }
 
-    public void testGetTsBlock() {}
+    public void executeQueryAndGetTsBlockAndFillLists(int sqlListIndex) throws IoTDBException {
+      String sql = sqlList.get(sqlListIndex);
+      long queryId = sessionManager.requestQueryId(internalSession, sessionManager.requestStatementId(internalSession));
+      Throwable throwable = null;
+
+      try {
+        Statement statement = sqlParser.createStatement(sql, internalSession.getZoneId(), internalSession);
+        ExecutionResult result = coordinator.executeForTableModel(
+                statement,
+                sqlParser,
+                internalSession,
+                queryId,
+                sessionManager.getSessionInfoOfTableModel(internalSession),
+                sql,
+                metadata,
+                Long.MAX_VALUE,
+                false
+        );
+        if (result.status.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()
+        && result.status.getCode() != TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode()) {
+          throw new IoTDBException(
+                  result.status.getMessage(),
+                  result.status.getCode()
+          );
+        }
+        IQueryExecution queryExecution = coordinator.getQueryExecution(queryId);
+        while (queryExecution.hasNextResult()) {
+          Optional<TsBlock> tsBlockOpt = queryExecution.getBatchResult();
+          if (!tsBlockOpt.isPresent()) {
+            continue;
+          }
+          TsBlock tsBlock = tsBlockOpt.get();
+          if (tsBlock.isEmpty()) {
+            continue;
+          }
+          Column timeColumn = tsBlock.getColumn(0);
+          Column valueColumn = tsBlock.getColumn(1);
+          int positionCount = tsBlock.getPositionCount();
+          for (int i = 0; i < positionCount; i++) {
+            if (valueColumn.isNull(i)) {
+              continue;
+            }
+            long time = timeColumn.getLong(i);
+            float value = valueColumn.getFloat(i);
+            if (sqlListIndex == 0) {
+              precool_1.add(value);
+            } else if (sqlListIndex == 1) {
+              precool_2.add(value);
+              time_data.add(time);
+            } else if (sqlListIndex == 2) {
+              phase_data.add(value);
+            } else if (sqlListIndex == 3) {
+              pack1_status.add(value);
+            } else if (sqlListIndex == 4) {
+              pack2_status.add(value);
+            }
+          }
+        }
+      } catch (Throwable t) {
+        throwable = t;
+        throw new RuntimeException("Failed to execute query: " + sql, t);
+      } finally {
+        coordinator.cleanupQueryExecution(queryId, null, throwable);
+      }
+    }
 
     @Override
     public void beforeStart() {
       try {
-        long t1s = System.currentTimeMillis();
-        TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
-        String address = endPoint.getIp() + ":" + endPoint.getPort();
-        long innerDataSet = 0L;
-        long innerIterator = 0L;
-        long innerQuery = 0L;
-        sourceSession =
-            new TableSessionBuilder()
-                .nodeUrls(Collections.singletonList(address))
-                .username("root")
-                .password("root")
-                .database("a320")
-                .build();
+        long b1 = System.currentTimeMillis();
+        internalSession = new InternalClientSession("query");
+        internalSession.setDatabaseName("a320");
+        sessionManager.registerSession(internalSession);
+        sessionManager.supplySession(
+                internalSession,
+                -1,
+                "root",
+                ZoneId.systemDefault(),
+                IoTDBConstant.ClientVersion.V_1_0
+        );
         for (int i = 0; i < 5; i++) {
-          long inner1 = System.currentTimeMillis();
-          SessionDataSet dataSet = sourceSession.executeQueryStatement(sqlList.get(i));
-          long inner2 = System.currentTimeMillis();
-          SessionDataSet.DataIterator iterator = dataSet.iterator();
-          long inner3 = System.currentTimeMillis();
-          if (i == 0) {
-            while (iterator.next()) {
-              precool_1.add(iterator.getFloat(2));
-            }
-          } else if (i == 1) {
-            while (iterator.next()) {
-              precool_2.add(iterator.getFloat(2));
-              time_data.add(iterator.getLong(1));
-            }
-          } else if (i == 2) {
-            while (iterator.next()) {
-              phase_data.add(iterator.getFloat(2));
-            }
-          } else if (i == 3) {
-            while (iterator.next()) {
-              pack1_status.add(iterator.getFloat(2));
-            }
-          } else if (i == 4) {
-            while (iterator.next()) {
-              pack2_status.add(iterator.getFloat(2));
-            }
-          }
-          long inner4 = System.currentTimeMillis();
-          dataSet.close();
-          innerDataSet += inner2 - inner1;
-          innerIterator += inner3 - inner2;
-          innerQuery += inner4 - inner3;
+          executeQueryAndGetTsBlockAndFillLists(i);
         }
-        sourceSession.close();
-        long t1e = System.currentTimeMillis();
-        System.out.println("*getDataSet cost:" + innerDataSet + "ms");
-        System.out.println("*getIterator cost:" + innerIterator + "ms");
-        System.out.println("*getSource cost:" + innerQuery + "ms");
-        System.out.println("init list costs:" + (t1e - t1s) + "ms");
-      } catch (IoTDBConnectionException | StatementExecutionException e) {
+        sessionManager.closeSession(internalSession, coordinator::cleanupQueryExecution);
+        sessionManager.removeCurrSession();
+        long b2 = System.currentTimeMillis();
+        System.out.println("init list:" + (b2 - b1) + "ms");
+      } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }
