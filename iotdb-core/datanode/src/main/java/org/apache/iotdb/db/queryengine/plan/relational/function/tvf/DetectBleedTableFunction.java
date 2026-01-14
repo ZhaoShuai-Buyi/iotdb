@@ -96,9 +96,14 @@ public class DetectBleedTableFunction implements TableFunction {
     @Override
     public void beforeStart() {
       try {
+        long t1s = System.currentTimeMillis();
         TEndPoint endPoint = IoTDBDescriptor.getInstance().getConfig().getAddressAndPort();
         String address = endPoint.getIp() + ":" + endPoint.getPort();
+        long innerSession = 0l;
+        long innerDataSet = 0l;
+        long innerDataIterator = 0l;
         for (int i = 0; i < 5; i++) {
+          long inner1 = System.currentTimeMillis();
           sourceSession.add(
               new TableSessionBuilder()
                   .nodeUrls(Collections.singletonList(address))
@@ -106,9 +111,20 @@ public class DetectBleedTableFunction implements TableFunction {
                   .password("root")
                   .database("a320")
                   .build());
+          long inner2 = System.currentTimeMillis();
           sourceDataSet.add(sourceSession.get(i).executeQueryStatement(sqlList.get(i)));
+          long inner3 = System.currentTimeMillis();
           sourceDataIterator.add(sourceDataSet.get(i).iterator());
+          long inner4 = System.currentTimeMillis();
+          innerSession += inner2 - inner1;
+          innerDataSet += inner3 - inner2;
+          innerDataIterator += inner4 - inner3;
         }
+        System.out.println("*sessions cost:" + innerSession + "ms");
+        System.out.println("*dataSets cost:" + innerDataSet + "ms");
+        System.out.println("*iterators cost:" + innerDataIterator + "ms");
+        long t1e = System.currentTimeMillis();
+        System.out.println("get iterator costs:" + (t1e - t1s) + "ms");
       } catch (IoTDBConnectionException | StatementExecutionException e) {
         throw new RuntimeException(e);
       }
@@ -116,12 +132,13 @@ public class DetectBleedTableFunction implements TableFunction {
 
     @Override
     public void process(List<ColumnBuilder> columnBuilders) {
-      List<Float> precool_1 = new ArrayList<>();
-      List<Float> precool_2 = new ArrayList<>();
-      List<Long> time_data = new ArrayList<>();
-      List<Float> phase_data = new ArrayList<>();
-      List<Float> pack1_status = new ArrayList<>();
-      List<Float> pack2_status = new ArrayList<>();
+      long t2s = System.currentTimeMillis();
+      List<Float> precool_1 = new ArrayList<>(17200);
+      List<Float> precool_2 = new ArrayList<>(17200);
+      List<Long> time_data = new ArrayList<>(17200);
+      List<Float> phase_data = new ArrayList<>(4300);
+      List<Float> pack1_status = new ArrayList<>(17200);
+      List<Float> pack2_status = new ArrayList<>(17200);
       try {
         while (sourceDataIterator.get(2).next()) {
           phase_data.add(sourceDataIterator.get(2).getFloat(2));
@@ -137,8 +154,11 @@ public class DetectBleedTableFunction implements TableFunction {
             pack2_status.add(sourceDataIterator.get(4).getFloat(2));
           }
         }
+        long t2e = System.currentTimeMillis();
+        System.out.println("get all source costs:" + (t2e - t2s) + "ms");
 
         // 第一阶段：数据预处理
+        long t3s = System.currentTimeMillis();
         for (int idx = 4; idx < precool_1.size(); idx++) {
           int phaseIdx = idx / 4;
 
@@ -166,8 +186,8 @@ public class DetectBleedTableFunction implements TableFunction {
             diffCache2.add(findMaxValue(window2) - findMinValue(window2));
           }
         }
-
-        System.out.println("diff_cache length: " + diffCache1.size());
+        long t3e = System.currentTimeMillis();
+        System.out.println("get diffCache costs:" + (t3e - t3s) + "ms");
 
         // 第二阶段：波动分析
         if (diffCache1.size() > 60) {
@@ -176,6 +196,7 @@ public class DetectBleedTableFunction implements TableFunction {
           float total2 = 0.0f;
 
           // 滑动窗口分析(60s窗口)
+          long t4s = System.currentTimeMillis();
           for (int windowEnd = 59; windowEnd < diffCache1.size(); windowEnd++) {
             List<Float> window1 = new ArrayList<>();
             List<Float> window2 = new ArrayList<>();
@@ -194,15 +215,15 @@ public class DetectBleedTableFunction implements TableFunction {
               total2 += minValue2;
             }
           }
+          long t4e = System.currentTimeMillis();
+          System.out.println("window analyze costs:" + (t4e - t4s) + "ms");
 
           // 计算平均波动值
           float avg1 = total1 / diffCache1.size();
           float avg2 = total2 / diffCache1.size();
 
-          System.out.println("avg1: " + avg1);
-          System.out.println("avg2: " + avg2);
-
           // 事件生成逻辑
+          long t5s = System.currentTimeMillis();
           if (avg1 <= 1.0 && avg2 <= 1.0) {
             columnBuilders.get(0).writeBoolean(true);
             columnBuilders.get(1).writeLong(1);
@@ -221,6 +242,8 @@ public class DetectBleedTableFunction implements TableFunction {
               columnBuilders.get(4).writeFloat(Math.round(avg2 * 100.0) / 100.0f);
             }
           }
+          long t5e = System.currentTimeMillis();
+          System.out.println("get result costs:" + (t5e - t5s) + "ms");
 
           finish = true;
         }
