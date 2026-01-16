@@ -141,7 +141,53 @@ public class DetectBleedTableFunction implements TableFunction {
           Column timeColumn = tsBlock.getColumn(0);
           Column valueColumn = tsBlock.getColumn(1);
           int positionCount = tsBlock.getPositionCount();
-          for (int i = 0; i < positionCount; i++) {
+
+          if (sqlListIndex == 0) {
+            for (int i = 0; i < positionCount; i++) {
+              if (valueColumn.isNull(i)) {
+                continue;
+              }
+              float value = valueColumn.getFloat(i);
+              precool_1.add(value);
+            }
+          } else if (sqlListIndex == 1) {
+            for (int i = 0; i < positionCount; i++) {
+              if (valueColumn.isNull(i)) {
+                continue;
+              }
+              long time = timeColumn.getLong(i);
+              float value = valueColumn.getFloat(i);
+              precool_2.add(value);
+              time_data.add(time);
+            }
+          } else if (sqlListIndex == 2) {
+            for (int i = 0; i < positionCount; i++) {
+              if (valueColumn.isNull(i)) {
+                continue;
+              }
+              float value = valueColumn.getFloat(i);
+              phase_data.add(value);
+            }
+          } else if (sqlListIndex == 3) {
+            for (int i = 0; i < positionCount; i++) {
+              if (valueColumn.isNull(i)) {
+                continue;
+              }
+              float value = valueColumn.getFloat(i);
+              pack1_status.add(value);
+            }
+
+          } else if (sqlListIndex == 4) {
+            for (int i = 0; i < positionCount; i++) {
+              if (valueColumn.isNull(i)) {
+                continue;
+              }
+              float value = valueColumn.getFloat(i);
+              pack2_status.add(value);
+            }
+          }
+
+/*          for (int i = 0; i < positionCount; i++) {
             if (valueColumn.isNull(i)) {
               continue;
             }
@@ -159,7 +205,7 @@ public class DetectBleedTableFunction implements TableFunction {
             } else if (sqlListIndex == 4) {
               pack2_status.add(value);
             }
-          }
+          }*/
         }
       } catch (Throwable t) {
         throwable = t;
