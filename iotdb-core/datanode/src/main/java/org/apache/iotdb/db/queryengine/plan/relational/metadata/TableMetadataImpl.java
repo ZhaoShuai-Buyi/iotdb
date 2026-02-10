@@ -35,9 +35,7 @@ import org.apache.iotdb.db.exception.sql.SemanticException;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.common.SessionInfo;
 import org.apache.iotdb.db.queryengine.plan.analyze.ClusterPartitionFetcher;
-import org.apache.iotdb.db.queryengine.plan.analyze.IModelFetcher;
 import org.apache.iotdb.db.queryengine.plan.analyze.IPartitionFetcher;
-import org.apache.iotdb.db.queryengine.plan.analyze.ModelFetcher;
 import org.apache.iotdb.db.queryengine.plan.relational.function.OperatorType;
 import org.apache.iotdb.db.queryengine.plan.relational.function.TableBuiltinTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.arithmetic.AdditionResolver;
@@ -76,6 +74,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.iotdb.db.queryengine.transformation.dag.column.FailFunctionColumnTransformer.FAIL_FUNCTION_NAME;
@@ -98,8 +97,6 @@ public class TableMetadataImpl implements Metadata {
   private final IPartitionFetcher partitionFetcher = ClusterPartitionFetcher.getInstance();
 
   private final DataNodeTableCache tableCache = DataNodeTableCache.getInstance();
-
-  private final IModelFetcher modelFetcher = ModelFetcher.getInstance();
 
   @Override
   public boolean tableExists(final QualifiedObjectName name) {
@@ -1081,20 +1078,6 @@ public class TableMetadataImpl implements Metadata {
                 functionName));
       }
       return BLOB;
-    } else if (TableBuiltinScalarFunction.READ_OBJECT
-        .getFunctionName()
-        .equalsIgnoreCase(functionName)) {
-      if (argumentTypes.isEmpty()
-          || argumentTypes.size() > 3
-          || !isObjectType(argumentTypes.get(0))
-          || (argumentTypes.size() >= 2 && !isIntegerNumber(argumentTypes.get(1)))
-          || (argumentTypes.size() >= 3 && !isIntegerNumber(argumentTypes.get(2)))) {
-        throw new SemanticException(
-            "Scalar function "
-                + functionName.toLowerCase(Locale.ENGLISH)
-                + " must have at 1~3 arguments, and first argument must be OBJECT type, other arguments must be int32 or int64 type");
-      }
-      return BLOB;
     }
 
     // builtin aggregation function
@@ -1414,16 +1397,22 @@ public class TableMetadataImpl implements Metadata {
   }
 
   @Override
-  public Optional<TableSchema> validateTableHeaderSchema(
-      String database,
-      TableSchema tableSchema,
-      MPPQueryContext context,
-      boolean allowCreateTable,
-      boolean isStrictTagColumn)
+  public Optional<TableSchema> validateTableHeaderSchema4TsFile(
+      final String database,
+      final TableSchema tableSchema,
+      final MPPQueryContext context,
+      final boolean allowCreateTable,
+      final boolean isStrictTagColumn,
+      final AtomicBoolean needDecode4DifferentTimeColumn)
       throws LoadAnalyzeTableColumnDisorderException {
     return TableHeaderSchemaValidator.getInstance()
-        .validateTableHeaderSchema(
-            database, tableSchema, context, allowCreateTable, isStrictTagColumn);
+        .validateTableHeaderSchema4TsFile(
+            database,
+            tableSchema,
+            context,
+            allowCreateTable,
+            isStrictTagColumn,
+            needDecode4DifferentTimeColumn);
   }
 
   @Override

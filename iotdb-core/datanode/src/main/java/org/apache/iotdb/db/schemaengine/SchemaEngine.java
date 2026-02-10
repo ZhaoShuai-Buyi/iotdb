@@ -43,6 +43,7 @@ import org.apache.iotdb.db.schemaengine.schemaregion.ISchemaRegion;
 import org.apache.iotdb.db.schemaengine.schemaregion.ISchemaRegionParams;
 import org.apache.iotdb.db.schemaengine.schemaregion.SchemaRegionLoader;
 import org.apache.iotdb.db.schemaengine.schemaregion.SchemaRegionParams;
+import org.apache.iotdb.db.schemaengine.schemaregion.impl.SchemaRegionMemoryImpl;
 import org.apache.iotdb.db.schemaengine.table.DataNodeTableCache;
 import org.apache.iotdb.db.schemaengine.template.ClusterTemplateManager;
 import org.apache.iotdb.mpp.rpc.thrift.TDataNodeHeartbeatReq;
@@ -253,6 +254,26 @@ public class SchemaEngine {
     return new ArrayList<>(schemaRegionMap.keySet());
   }
 
+  public void updateSubtreeMeasurementCountForTemplate(final int templateId, final long delta) {
+    if (delta == 0) {
+      return;
+    }
+    for (final ISchemaRegion schemaRegion : schemaRegionMap.values()) {
+      if (schemaRegion instanceof SchemaRegionMemoryImpl) {
+        try {
+          ((SchemaRegionMemoryImpl) schemaRegion)
+              .updateSubtreeMeasurementCountForTemplate(templateId, delta);
+        } catch (MetadataException e) {
+          logger.warn(
+              "Failed to update subtree measurement count for template {} in schemaRegion {}",
+              templateId,
+              schemaRegion.getSchemaRegionId(),
+              e);
+        }
+      }
+    }
+  }
+
   public synchronized void createSchemaRegion(
       final String storageGroup, final SchemaRegionId schemaRegionId) throws MetadataException {
     if (this.schemaRegionMap == null) {
@@ -383,8 +404,16 @@ public class SchemaEngine {
                       DataNodeTableCache.getInstance()
                           .getTable(
                               PathUtils.unQualifyDatabaseName(schemaRegion.getDatabaseFullPath()),
-                              tableEntry.getKey());
-                  return Objects.nonNull(table) ? table.getFieldNum() * tableEntry.getValue() : 0;
+                              tableEntry.getKey(),
+                              false);
+                  if (Objects.isNull(table)) {
+                    logger.warn(
+                        "Failed to get table {}.{} when calculating the time series number. Maybe the cluster is restarting or the table is being dropped.",
+                        PathUtils.unQualifyDatabaseName(schemaRegion.getDatabaseFullPath()),
+                        tableEntry.getKey());
+                    return 0L;
+                  }
+                  return table.getFieldNum() * tableEntry.getValue();
                 })
             .reduce(0L, Long::sum);
   }

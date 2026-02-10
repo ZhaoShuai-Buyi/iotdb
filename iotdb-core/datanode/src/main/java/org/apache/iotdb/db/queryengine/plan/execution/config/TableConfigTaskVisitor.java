@@ -71,6 +71,10 @@ import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.ai.ShowAID
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.ai.ShowLoadedModelsTask;
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.ai.ShowModelsTask;
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.ai.UnloadModelTask;
+import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.externalservice.CreateExternalServiceTask;
+import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.externalservice.DropExternalServiceTask;
+import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.externalservice.StartExternalServiceTask;
+import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.externalservice.StopExternalServiceTask;
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.region.ExtendRegionTask;
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.region.MigrateRegionTask;
 import org.apache.iotdb.db.queryengine.plan.execution.config.metadata.region.ReconstructRegionTask;
@@ -144,6 +148,7 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.AstVisitor;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ClearCache;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ColumnDefinition;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CreateDB;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CreateExternalService;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CreateFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CreateModel;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CreatePipe;
@@ -159,6 +164,7 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DeleteDevice;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DescribeTable;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropColumn;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropDB;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropExternalService;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropModel;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.DropPipe;
@@ -217,8 +223,10 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ShowTables;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ShowTopics;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ShowVariables;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ShowVersion;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StartExternalService;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StartPipe;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StartRepairData;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StopExternalService;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StopPipe;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.StopRepairData;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.UnloadModel;
@@ -572,8 +580,22 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
       table.addProp(TsTable.COMMENT_KEY, node.getComment());
     }
 
+    // check if the time column has been specified
+    long timeColumnCount =
+        node.getElements().stream()
+            .filter(
+                columnDefinition ->
+                    columnDefinition.getColumnCategory() == TsTableColumnCategory.TIME)
+            .count();
+    if (timeColumnCount > 1) {
+      throw new SemanticException("A table cannot have more than one time column");
+    }
+    if (timeColumnCount == 0) {
+      // append the time column with default name "time" if user do not specify the time column
+      table.addColumnSchema(new TimeColumnSchema(TIME_COLUMN_NAME, TSDataType.TIMESTAMP));
+    }
+
     // TODO: Place the check at statement analyzer
-    boolean hasTimeColumn = false;
     final Set<String> sourceNameSet = new HashSet<>();
     boolean hasObject = false;
     for (final ColumnDefinition columnDefinition : node.getElements()) {
@@ -582,15 +604,18 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
       final TSDataType dataType = getDataType(columnDefinition.getType());
       hasObject |= dataType == TSDataType.OBJECT;
       final String comment = columnDefinition.getComment();
-      if (checkTimeColumnIdempotent(category, columnName, dataType, comment, table)
-          && !hasTimeColumn) {
-        hasTimeColumn = true;
-        continue;
-      }
+
       if (table.getColumnSchema(columnName) != null) {
         throw new SemanticException(
-            String.format("Columns in table shall not share the same name %s.", columnName));
+            String.format("Columns in table shall not share the same name: '%s'.", columnName));
       }
+
+      //  allow the user create time column
+      if (category == TsTableColumnCategory.TIME) {
+        validateAndGenerateTimeColumn(columnName, dataType, comment, table);
+        continue;
+      }
+
       final TsTableColumnSchema schema =
           TableHeaderSchemaValidator.generateColumnSchema(
               category,
@@ -619,6 +644,25 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
     return new Pair<>(database, table);
   }
 
+  private void validateAndGenerateTimeColumn(
+      final String columnName,
+      final TSDataType dataType,
+      final String comment,
+      final TsTable table) {
+
+    if (dataType == TSDataType.TIMESTAMP) {
+      final TsTableColumnSchema timeColumnSchema =
+          new TimeColumnSchema(columnName, TSDataType.TIMESTAMP);
+      if (Objects.nonNull(comment)) {
+        timeColumnSchema.getProps().put(TsTable.COMMENT_KEY, comment);
+      }
+      table.addColumnSchema(timeColumnSchema);
+
+    } else {
+      throw new SemanticException("The time column's type shall be 'timestamp'.");
+    }
+  }
+
   @Override
   protected IConfigTask visitAlterColumnDataType(
       AlterColumnDataType node, MPPQueryContext context) {
@@ -628,6 +672,10 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
     final DataType dataType = node.getDataType();
     final boolean ifTableExists = node.isIfTableExists();
     final boolean ifColumnExists = node.isIfColumnExists();
+    accessControl.checkCanAlterTable(
+        context.getSession().getUserName(),
+        new QualifiedObjectName(databaseTablePair.getLeft(), databaseTablePair.getRight()),
+        context);
     return new AlterColumnDataTypeTask(
         databaseTablePair.getLeft(),
         databaseTablePair.getRight(),
@@ -637,34 +685,6 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
         columnName,
         getDataType(dataType),
         node.isView());
-  }
-
-  private boolean checkTimeColumnIdempotent(
-      final TsTableColumnCategory category,
-      final String columnName,
-      final TSDataType dataType,
-      final String comment,
-      final TsTable table) {
-    if (category == TsTableColumnCategory.TIME || columnName.equals(TIME_COLUMN_NAME)) {
-      if (category == TsTableColumnCategory.TIME
-          && columnName.equals(TIME_COLUMN_NAME)
-          && dataType == TSDataType.TIMESTAMP) {
-        if (Objects.nonNull(comment)) {
-          final TsTableColumnSchema columnSchema =
-              new TimeColumnSchema(TIME_COLUMN_NAME, TSDataType.TIMESTAMP);
-          columnSchema.getProps().put(TsTable.COMMENT_KEY, comment);
-          table.addColumnSchema(columnSchema);
-        }
-        return true;
-      } else if (dataType == TSDataType.TIMESTAMP) {
-        throw new SemanticException(
-            "The time column category shall be bounded with column name 'time'.");
-      } else {
-        throw new SemanticException("The time column's type shall be 'timestamp'.");
-      }
-    }
-
-    return false;
   }
 
   @Override
@@ -1509,6 +1529,38 @@ public class TableConfigTaskVisitor extends AstVisitor<IConfigTask, MPPQueryCont
     context.setQueryType(QueryType.WRITE);
     accessControl.checkUserGlobalSysPrivilege(context);
     return new DropFunctionTask(Model.TABLE, node.getUdfName());
+  }
+
+  @Override
+  protected IConfigTask visitCreateExternalService(
+      CreateExternalService node, MPPQueryContext context) {
+    context.setQueryType(QueryType.WRITE);
+    accessControl.checkUserGlobalSysPrivilege(context);
+    return new CreateExternalServiceTask(node);
+  }
+
+  @Override
+  protected IConfigTask visitStartExternalService(
+      StartExternalService node, MPPQueryContext context) {
+    context.setQueryType(QueryType.WRITE);
+    accessControl.checkUserGlobalSysPrivilege(context);
+    return new StartExternalServiceTask(node.getServiceName());
+  }
+
+  @Override
+  protected IConfigTask visitStopExternalService(
+      StopExternalService node, MPPQueryContext context) {
+    context.setQueryType(QueryType.WRITE);
+    accessControl.checkUserGlobalSysPrivilege(context);
+    return new StopExternalServiceTask(node.getServiceName());
+  }
+
+  @Override
+  protected IConfigTask visitDropExternalService(
+      DropExternalService node, MPPQueryContext context) {
+    context.setQueryType(QueryType.WRITE);
+    accessControl.checkUserGlobalSysPrivilege(context);
+    return new DropExternalServiceTask(node.getServiceName(), node.isForcedly());
   }
 
   @Override

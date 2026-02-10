@@ -87,12 +87,13 @@ struct TForecastReq {
   3: required i32 outputLength
   4: optional string historyCovs
   5: optional string futureCovs
-  6: optional map<string, string> options
+  6: optional bool autoAdapt
+  7: optional map<string, string> options
 }
 
 struct TForecastResp {
   1: required common.TSStatus status
-  2: optional binary forecastResult
+  2: optional list<binary> forecastResult
 }
 
 struct TShowModelsReq {

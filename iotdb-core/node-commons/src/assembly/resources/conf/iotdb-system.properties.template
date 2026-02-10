@@ -73,7 +73,7 @@ cn_consensus_port=10720
 # Could set 127.0.0.1(for local test) or ipv4 address
 # effectiveMode: restart
 # Datatype: String
-dn_rpc_address=0.0.0.0
+dn_rpc_address=127.0.0.1
 
 # Used for connection of IoTDB native clients(Session)
 # Bind with dn_rpc_address
@@ -1316,16 +1316,6 @@ enable_tsfile_validation=false
 # Datatype: long
 # Unit: ms
 tier_ttl_in_ms=-1
-
-# The maximum size limit for a single object file.
-# effectiveMode: hot_reload
-# Datatype: long
-max_object_file_size_in_byte=4294967296
-
-# There are no special restrictions on table names, column names, and device names of the OBJECT type.
-# effectiveMode: first_start
-# Datatype: boolean
-restrict_object_limit=false
 
 ####################
 ### Compaction Configurations

@@ -29,16 +29,17 @@ import org.apache.iotdb.commons.pipe.agent.task.progress.PipeEventCommitManager;
 import org.apache.iotdb.commons.pipe.agent.task.subtask.PipeReportableSubtask;
 import org.apache.iotdb.commons.pipe.event.EnrichedEvent;
 import org.apache.iotdb.commons.pipe.resource.log.PipeLogger;
+import org.apache.iotdb.commons.utils.ErrorHandlingCommonUtils;
 import org.apache.iotdb.db.pipe.agent.PipeDataNodeAgent;
 import org.apache.iotdb.db.pipe.agent.task.connection.PipeEventCollector;
 import org.apache.iotdb.db.pipe.event.UserDefinedEnrichedEvent;
 import org.apache.iotdb.db.pipe.event.common.heartbeat.PipeHeartbeatEvent;
+import org.apache.iotdb.db.pipe.event.common.tablet.PipeInsertNodeTabletInsertionEvent;
 import org.apache.iotdb.db.pipe.event.common.tsfile.PipeTsFileInsertionEvent;
 import org.apache.iotdb.db.pipe.metric.overview.PipeDataNodeSinglePipeMetrics;
 import org.apache.iotdb.db.pipe.metric.processor.PipeProcessorMetrics;
 import org.apache.iotdb.db.pipe.processor.pipeconsensus.PipeConsensusProcessor;
 import org.apache.iotdb.db.storageengine.StorageEngine;
-import org.apache.iotdb.db.utils.ErrorHandlingUtils;
 import org.apache.iotdb.pipe.api.PipeProcessor;
 import org.apache.iotdb.pipe.api.event.Event;
 import org.apache.iotdb.pipe.api.event.dml.insertion.TabletInsertionEvent;
@@ -143,7 +144,25 @@ public class PipeProcessorSubtask extends PipeReportableSubtask {
       // event can be supplied after the subtask is closed, so we need to check isClosed here
       if (!isClosed.get()) {
         if (event instanceof TabletInsertionEvent) {
-          pipeProcessor.process((TabletInsertionEvent) event, outputEventCollector);
+          if (event instanceof PipeInsertNodeTabletInsertionEvent
+              && ((PipeInsertNodeTabletInsertionEvent) event).shouldParse4Privilege()) {
+            final AtomicReference<Exception> ex = new AtomicReference<>();
+            ((PipeInsertNodeTabletInsertionEvent) event)
+                .toRawTabletInsertionEvents()
+                .forEach(
+                    rawTabletInsertionEvent -> {
+                      try {
+                        pipeProcessor.process(rawTabletInsertionEvent, outputEventCollector);
+                      } catch (Exception e) {
+                        ex.set(e);
+                      }
+                    });
+            if (ex.get() != null) {
+              throw ex.get();
+            }
+          } else {
+            pipeProcessor.process((TabletInsertionEvent) event, outputEventCollector);
+          }
           PipeProcessorMetrics.getInstance().markTabletEvent(taskID);
         } else if (event instanceof TsFileInsertionEvent) {
           // We have to parse the privilege first, to avoid passing no-privilege data to processor
@@ -237,7 +256,7 @@ public class PipeProcessorSubtask extends PipeReportableSubtask {
                 lastEvent instanceof EnrichedEvent
                     ? ((EnrichedEvent) lastEvent).coreReportMessage()
                     : lastEvent,
-                ErrorHandlingUtils.getRootCause(e).getMessage()),
+                ErrorHandlingCommonUtils.getRootCause(e).getMessage()),
             e);
       } else {
         LOGGER.info(
@@ -274,7 +293,7 @@ public class PipeProcessorSubtask extends PipeReportableSubtask {
       LOGGER.info(
           "Exception occurred when closing pipe processor subtask {}, root cause: {}",
           taskID,
-          ErrorHandlingUtils.getRootCause(e).getMessage(),
+          ErrorHandlingCommonUtils.getRootCause(e).getMessage(),
           e);
     } finally {
       // should be called after pipeProcessor.close()
@@ -318,7 +337,7 @@ public class PipeProcessorSubtask extends PipeReportableSubtask {
 
   @Override
   protected String getRootCause(final Throwable throwable) {
-    return ErrorHandlingUtils.getRootCause(throwable).getMessage();
+    return ErrorHandlingCommonUtils.getRootCause(throwable).getMessage();
   }
 
   @Override

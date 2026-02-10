@@ -231,7 +231,6 @@ public enum ConfigPhysicalPlanType {
   PreDeleteView((short) 876),
   RenameViewColumn((short) 877),
   AlterColumnDataType((short) 878),
-  CommitAlterColumnDataType((short) 879),
 
   /** Deprecated types for sync, restored them for upgrade. */
   @Deprecated
@@ -334,6 +333,12 @@ public enum ConfigPhysicalPlanType {
   RRenameUser((short) 2105),
 
   EnableSeparationOfAdminPowers((short) 2200),
+
+  CreateExternalService((short) 2301),
+  StartExternalService((short) 2302),
+  StopExternalService((short) 2303),
+  DropExternalService((short) 2304),
+  ShowExternalService((short) 2305),
 
   /** Test Only. */
   TestOnly((short) 30000),

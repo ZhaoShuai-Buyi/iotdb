@@ -69,6 +69,10 @@ public abstract class AstVisitor<R, C> {
     return visitLiteral(node, context);
   }
 
+  protected R visitFloatLiteral(FloatLiteral node, C context) {
+    return visitLiteral(node, context);
+  }
+
   protected R visitDecimalLiteral(DecimalLiteral node, C context) {
     return visitLiteral(node, context);
   }
@@ -598,6 +602,26 @@ public abstract class AstVisitor<R, C> {
   }
 
   protected R visitDropFunction(DropFunction node, C context) {
+    return visitStatement(node, context);
+  }
+
+  protected R visitCreateExternalService(CreateExternalService node, C context) {
+    return visitStatement(node, context);
+  }
+
+  protected R visitStartExternalService(StartExternalService node, C context) {
+    return visitStatement(node, context);
+  }
+
+  protected R visitStopExternalService(StopExternalService node, C context) {
+    return visitStatement(node, context);
+  }
+
+  protected R visitDropExternalService(DropExternalService node, C context) {
+    return visitStatement(node, context);
+  }
+
+  protected R visitShowExternalService(ShowExternalService node, C context) {
     return visitStatement(node, context);
   }
 

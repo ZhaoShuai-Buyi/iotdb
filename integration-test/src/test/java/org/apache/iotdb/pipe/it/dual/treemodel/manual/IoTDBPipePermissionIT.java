@@ -28,7 +28,6 @@ import org.apache.iotdb.it.env.MultiEnvFactory;
 import org.apache.iotdb.it.env.cluster.node.DataNodeWrapper;
 import org.apache.iotdb.it.framework.IoTDBTestRunner;
 import org.apache.iotdb.itbase.category.MultiClusterIT2DualTreeManual;
-import org.apache.iotdb.pipe.it.dual.tablemodel.TableModelUtils;
 import org.apache.iotdb.rpc.TSStatusCode;
 
 import org.junit.Assert;
@@ -235,6 +234,48 @@ public class IoTDBPipePermissionIT extends AbstractPipeDualTreeModelManualIT {
   }
 
   @Test
+  public void testSourcePermissionRestart() throws SQLException {
+    try (final Connection connection = senderEnv.getConnection();
+        final Statement statement = connection.createStatement()) {
+      TestUtils.executeNonQuery(senderEnv, "create user `thulab` 'passwD@123456'", connection);
+      TestUtils.executeNonQueries(
+          senderEnv, Collections.singletonList("grant READ on root.** to user thulab"));
+
+      statement.execute(
+          String.format(
+              "create pipe a2b"
+                  + " with source ("
+                  + "'user'='thulab'"
+                  + ", 'password'='passwD@123456')"
+                  + " with sink ("
+                  + "'node-urls'='%s')",
+              receiverEnv.getDataNodeWrapperList().get(0).getIpAndPortString()));
+
+      TestUtils.executeNonQueries(
+          senderEnv,
+          Arrays.asList(
+              "create aligned timeSeries root.vehicle.plane(temperature DOUBLE, pressure INT32)"));
+      TestUtils.executeNonQueries(
+          receiverEnv,
+          Arrays.asList(
+              "create aligned timeSeries root.vehicle.plane(temperature DOUBLE, pressure INT32)"));
+
+      TestUtils.executeNonQueries(senderEnv, Collections.singletonList("start pipe a2b"));
+
+      TestUtils.executeNonQueries(
+          senderEnv,
+          Arrays.asList(
+              "insert into root.vehicle.plane(temperature, pressure) values (36.5, 1103)"));
+
+      TestUtils.assertDataEventuallyOnEnv(
+          receiverEnv,
+          "select count(pressure) from root.vehicle.plane",
+          "count(root.vehicle.plane.pressure),",
+          Collections.singleton("1,"));
+    }
+  }
+
+  @Test
   public void testSourcePermission() {
     TestUtils.executeNonQuery(senderEnv, "create user `thulab` 'passwD@123456'", null);
 
@@ -324,6 +365,13 @@ public class IoTDBPipePermissionIT extends AbstractPipeDualTreeModelManualIT {
             "create database root.db", "create timeSeries root.db.device.measurement int32"),
         null);
 
+    // Write some aligned historical data
+    TestUtils.executeNonQueries(
+        senderEnv,
+        Arrays.asList(
+            "create aligned timeSeries root.vehicle.plane(temperature DOUBLE, pressure INT32)",
+            "insert into root.vehicle.plane(temperature, pressure) values (36.5, 1103)"));
+
     // Transfer snapshot
     try (final Connection connection = senderEnv.getConnection();
         final Statement statement = connection.createStatement()) {
@@ -364,6 +412,34 @@ public class IoTDBPipePermissionIT extends AbstractPipeDualTreeModelManualIT {
     TestUtils.assertDataEventuallyOnEnv(
         receiverEnv, "count databases root.test1", "count,", Collections.singleton("1,"));
 
+    // Write some data
+    TestUtils.executeNonQueries(
+        senderEnv,
+        Arrays.asList(
+            "create timeSeries root.vehicle.car.temperature DOUBLE",
+            "insert into root.vehicle.car(temperature) values (36.5)"));
+
+    // Exception, skip
+    TestUtils.assertDataAlwaysOnEnv(
+        receiverEnv, "count timeSeries", "count(timeseries),", Collections.singleton("0,"));
+
+    // Provide time series
+    TestUtils.executeNonQuery(receiverEnv, "create timeSeries root.vehicle.car.temperature DOUBLE");
+
+    // Exception, skip
+    TestUtils.assertDataAlwaysOnEnv(
+        receiverEnv,
+        "select count(temperature) from root.vehicle.car",
+        "count(root.vehicle.car.pressure),",
+        Collections.singleton("0,"));
+
+    // Exception, skip
+    TestUtils.assertDataAlwaysOnEnv(
+        receiverEnv,
+        "select count(temperature) from root.vehicle.plane",
+        "count(root.vehicle.plane.temperature),",
+        Collections.singleton("0,"));
+
     // Alter pipe, throw exception if no privileges
     try (final Connection connection = senderEnv.getConnection();
         final Statement statement = connection.createStatement()) {
@@ -377,13 +453,15 @@ public class IoTDBPipePermissionIT extends AbstractPipeDualTreeModelManualIT {
     TestUtils.executeNonQueries(
         senderEnv,
         Arrays.asList(
-            "create timeSeries root.vehicle.car.temperature DOUBLE",
-            "insert into root.vehicle.car(temperature) values (36.5)"));
+            "create timeSeries root.vehicle.car.pressure DOUBLE",
+            "insert into root.vehicle.car(pressure) values (36.5)"));
 
     // Exception, block here
-    TableModelUtils.assertCountDataAlwaysOnEnv("test", "test", 0, receiverEnv);
     TestUtils.assertDataAlwaysOnEnv(
-        receiverEnv, "count timeSeries", "count(timeseries),", Collections.singleton("0,"));
+        receiverEnv,
+        "select count(pressure) from root.vehicle.car",
+        "count(root.vehicle.car.pressure),",
+        Collections.singleton("0,"));
 
     // Grant SELECT privilege
     TestUtils.executeNonQueries(
@@ -392,8 +470,8 @@ public class IoTDBPipePermissionIT extends AbstractPipeDualTreeModelManualIT {
     // Will finally pass
     TestUtils.assertDataEventuallyOnEnv(
         receiverEnv,
-        "select count(*) from root.vehicle.**",
-        "count(root.vehicle.car.temperature),",
+        "select count(pressure) from root.vehicle.car",
+        "count(root.vehicle.car.pressure),",
         Collections.singleton("1,"));
 
     // test showing pipe

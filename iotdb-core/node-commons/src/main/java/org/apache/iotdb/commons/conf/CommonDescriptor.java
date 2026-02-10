@@ -281,21 +281,11 @@ public class CommonDescriptor {
             properties.getProperty(
                 "path_log_max_size", String.valueOf(config.getPathLogMaxSize()))));
 
-    config.setRestrictObjectLimit(
-        Boolean.parseBoolean(
-            properties.getProperty(
-                "restrict_object_limit", String.valueOf(config.isRestrictObjectLimit()))));
-
     loadRetryProperties(properties);
     loadBinaryAllocatorProps(properties);
   }
 
   private void loadSubscriptionProps(TrimProperties properties) {
-    config.setSubscriptionEnabled(
-        Boolean.parseBoolean(
-            properties.getProperty(
-                "subscription_enabled", String.valueOf(config.getSubscriptionEnabled()))));
-
     config.setSubscriptionCacheMemoryUsagePercentage(
         Float.parseFloat(
             properties.getProperty(

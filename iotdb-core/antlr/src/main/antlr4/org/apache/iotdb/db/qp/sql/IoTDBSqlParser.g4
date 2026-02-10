@@ -52,6 +52,8 @@ ddlStatement
     | createFunction | dropFunction | showFunctions
     // Trigger
     | createTrigger | dropTrigger | showTriggers | startTrigger | stopTrigger
+    // ExternalService
+    | createService | startService | stopService | dropService | showService
     // Pipe Task
     | createPipe | alterPipe | dropPipe | startPipe | stopPipe | showPipes
     // Pipe Plugin
@@ -198,7 +200,12 @@ showDevices
 
 // ---- Show Timeseries
 showTimeseries
-    : SHOW LATEST? TIMESERIES prefixPath? timeseriesWhereClause? timeConditionClause? rowPaginationClause?
+    : SHOW LATEST? TIMESERIES prefixPath? timeseriesWhereClause? timeConditionClause? orderByTimeseriesClause? rowPaginationClause?
+    ;
+
+// order by timeseries for SHOW TIMESERIES
+orderByTimeseriesClause
+    : ORDER BY TIMESERIES (ASC | DESC)?
     ;
 
 // ---- Show Child Paths
@@ -437,6 +444,28 @@ stopTrigger
     : STOP TRIGGER triggerName=identifier
     ;
 
+// ExternalService =========================================================================================
+createService
+    : CREATE SERVICE serviceName=identifier
+        AS className=STRING_LITERAL
+    ;
+
+startService
+    : START SERVICE serviceName=identifier
+    ;
+
+stopService
+    : STOP SERVICE serviceName=identifier
+    ;
+
+dropService
+    : DROP SERVICE serviceName=identifier FORCEDLY?
+
+    ;
+
+showService
+    : SHOW SERVICES (ON targetDataNodeId=INTEGER_LITERAL)?
+    ;
 
 // CQ ==============================================================================================
 // ---- Create Continuous Query

@@ -187,6 +187,7 @@ import org.apache.iotdb.db.queryengine.plan.statement.metadata.ShowTimeSeriesSta
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.ShowTriggersStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.ShowVariablesStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.UnSetTTLStatement;
+import org.apache.iotdb.db.queryengine.plan.statement.metadata.externalservice.ShowExternalServiceStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.model.CreateModelStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.model.CreateTrainingStatement;
 import org.apache.iotdb.db.queryengine.plan.statement.metadata.model.DropModelStatement;
@@ -352,11 +353,16 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
       Pattern.compile(NODE_NAME_IN_INTO_PATH_MATCHER);
 
   private static final String IGNORENULL = "IgnoreNull";
+  public static final String UNSUPPORTED_DATATYPE_MSG = "Unsupported datatype: %s";
+  public static final String INCORRECT_DATA_TYPE_MSG = "Incorrect Data type";
   private ZoneId zoneId;
 
   private boolean useWildcard = false;
 
   private boolean lastLevelUseWildcard = false;
+
+  public static final String SERVICE_MANAGEMENT_NOT_SUPPORTED =
+      "Service management SQLs are not supported now!";
 
   public void setZoneId(ZoneId zoneId) {
     this.zoneId = zoneId;
@@ -456,7 +462,7 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
         createTimeSeriesStatement.setDataType(TSDataType.valueOf(datatypeString));
         props.remove(IoTDBConstant.COLUMN_TIMESERIES_DATATYPE.toLowerCase());
       } catch (Exception e) {
-        throw new SemanticException(String.format("Unsupported datatype: %s", datatypeString));
+        throw new SemanticException(String.format(UNSUPPORTED_DATATYPE_MSG, datatypeString));
       }
     }
     if (createTimeSeriesStatement.getDataType() == null) {
@@ -681,15 +687,24 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
 
   private TSDataType parseDataTypeAttribute(IoTDBSqlParser.AttributeValueContext ctx) {
     if (ctx == null) {
-      throw new SemanticException("Incorrect Data type");
+      throw new SemanticException(INCORRECT_DATA_TYPE_MSG);
     }
 
     String dataTypeString = parseAttributeValue(ctx);
-    TSDataType dataType = TSDataType.valueOf(dataTypeString);
-    if (TSDataType.UNKNOWN.equals(dataType) || TSDataType.VECTOR.equals(dataType)) {
-      throw new SemanticException(String.format("Unsupported datatype: %s", dataTypeString));
+    if (dataTypeString == null || dataTypeString.isEmpty()) {
+      throw new SemanticException(INCORRECT_DATA_TYPE_MSG);
     }
-    return dataType;
+
+    dataTypeString = dataTypeString.trim().toUpperCase();
+    try {
+      TSDataType dataType = TSDataType.valueOf(dataTypeString);
+      if (TSDataType.UNKNOWN.equals(dataType) || TSDataType.VECTOR.equals(dataType)) {
+        throw new SemanticException(String.format(UNSUPPORTED_DATATYPE_MSG, dataTypeString));
+      }
+      return dataType;
+    } catch (IllegalArgumentException e) {
+      throw new SemanticException(String.format(UNSUPPORTED_DATATYPE_MSG, dataTypeString));
+    }
   }
 
   @Override
@@ -773,6 +788,16 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
     if (ctx.timeConditionClause() != null) {
       showTimeSeriesStatement.setTimeCondition(
           parseWhereClause(ctx.timeConditionClause().whereClause()));
+    }
+
+    // ORDER BY TIMESERIES [ASC|DESC]
+    if (ctx.orderByTimeseriesClause() != null) {
+      if (orderByHeat) {
+        throw new SemanticException(
+            "LATEST and ORDER BY TIMESERIES cannot be used at the same time.");
+      }
+      showTimeSeriesStatement.setTimeseriesOrdering(
+          ctx.orderByTimeseriesClause().DESC() != null ? Ordering.DESC : Ordering.ASC);
     }
     if (ctx.rowPaginationClause() != null) {
       if (ctx.rowPaginationClause().limitClause() != null) {
@@ -1091,6 +1116,36 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
   @Override
   public Statement visitShowTriggers(IoTDBSqlParser.ShowTriggersContext ctx) {
     return new ShowTriggersStatement();
+  }
+
+  @Override
+  public Statement visitCreateService(IoTDBSqlParser.CreateServiceContext ctx) {
+    throw new UnsupportedOperationException(SERVICE_MANAGEMENT_NOT_SUPPORTED);
+  }
+
+  @Override
+  public Statement visitStartService(IoTDBSqlParser.StartServiceContext ctx) {
+    throw new UnsupportedOperationException(SERVICE_MANAGEMENT_NOT_SUPPORTED);
+  }
+
+  @Override
+  public Statement visitStopService(IoTDBSqlParser.StopServiceContext ctx) {
+    throw new UnsupportedOperationException(SERVICE_MANAGEMENT_NOT_SUPPORTED);
+  }
+
+  @Override
+  public Statement visitDropService(IoTDBSqlParser.DropServiceContext ctx) {
+    throw new UnsupportedOperationException(SERVICE_MANAGEMENT_NOT_SUPPORTED);
+  }
+
+  @Override
+  public Statement visitShowService(IoTDBSqlParser.ShowServiceContext ctx) {
+    // show services on all DNs
+    int dataNodeId = -1;
+    if (ctx.ON() != null) {
+      dataNodeId = Integer.parseInt(ctx.targetDataNodeId.getText());
+    }
+    return new ShowExternalServiceStatement(dataNodeId);
   }
 
   // Create PipePlugin =====================================================================
@@ -4002,10 +4057,10 @@ public class ASTVisitor extends IoTDBSqlParserBaseVisitor<Statement> {
       try {
         dataType = TSDataType.valueOf(dataTypeString);
         if (TSDataType.UNKNOWN.equals(dataType) || TSDataType.VECTOR.equals(dataType)) {
-          throw new SemanticException(String.format("Unsupported datatype: %s", dataTypeString));
+          throw new SemanticException(String.format(UNSUPPORTED_DATATYPE_MSG, dataTypeString));
         }
       } catch (Exception e) {
-        throw new SemanticException(String.format("Unsupported datatype: %s", dataTypeString));
+        throw new SemanticException(String.format(UNSUPPORTED_DATATYPE_MSG, dataTypeString));
       }
     }
     return dataType;
