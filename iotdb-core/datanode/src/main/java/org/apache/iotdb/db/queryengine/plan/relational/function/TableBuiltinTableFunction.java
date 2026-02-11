@@ -27,6 +27,7 @@ import org.apache.iotdb.commons.udf.builtin.relational.tvf.TumbleTableFunction;
 import org.apache.iotdb.commons.udf.builtin.relational.tvf.VariationTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.ClassifyTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.ForecastTableFunction;
+import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.PVFTableFunction;
 import org.apache.iotdb.db.queryengine.plan.relational.function.tvf.PatternMatchTableFunction;
 import org.apache.iotdb.udf.api.relational.TableFunction;
 
@@ -44,7 +45,8 @@ public enum TableBuiltinTableFunction {
   CAPACITY("capacity"),
   FORECAST("forecast"),
   PATTERN_MATCH("pattern_match"),
-  CLASSIFY("classify");
+  CLASSIFY("classify"),
+  PVF("pvf");
 
   private final String functionName;
 
@@ -90,6 +92,8 @@ public enum TableBuiltinTableFunction {
         return new ForecastTableFunction();
       case "classify":
         return new ClassifyTableFunction();
+      case "pvf":
+        return new PVFTableFunction();
       default:
         throw new UnsupportedOperationException("Unsupported table function: " + functionName);
     }
