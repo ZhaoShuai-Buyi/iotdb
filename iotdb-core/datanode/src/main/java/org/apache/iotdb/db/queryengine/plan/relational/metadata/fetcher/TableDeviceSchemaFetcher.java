@@ -135,6 +135,7 @@ public class TableDeviceSchemaFetcher {
               LocalExecutionPlanner.getInstance().metadata,
               // Never timeout for insert
               Long.MAX_VALUE,
+              false,
               false);
 
       if (executionResult.status.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
@@ -364,17 +365,17 @@ public class TableDeviceSchemaFetcher {
       final Map<String, List<DeviceEntry>> deviceEntryMap,
       final String database,
       final TsTable tableInstance,
-      final Map<Integer, List<SchemaFilter>> idFilters,
+      final Map<Integer, List<SchemaFilter>> tagFilters,
       final Predicate<AlignedDeviceEntry> check,
       final List<String> attributeColumns,
       final List<IDeviceID> fetchPaths,
       final boolean isDirectDeviceQuery,
       final MPPQueryContext queryContext) {
-    final String[] idValues = new String[tableInstance.getTagNum()];
-    for (final List<SchemaFilter> schemaFilters : idFilters.values()) {
+    final String[] tagValues = new String[tableInstance.getTagNum()];
+    for (final List<SchemaFilter> schemaFilters : tagFilters.values()) {
       final TagFilter tagFilter = (TagFilter) schemaFilters.get(0);
       final SchemaFilter childFilter = tagFilter.getChild();
-      idValues[tagFilter.getIndex()] = ((PreciseFilter) childFilter).getValue();
+      tagValues[tagFilter.getIndex()] = ((PreciseFilter) childFilter).getValue();
     }
 
     return !TreeViewSchema.isTreeViewTable(tableInstance)
@@ -386,9 +387,9 @@ public class TableDeviceSchemaFetcher {
             attributeColumns,
             fetchPaths,
             isDirectDeviceQuery,
-            idValues,
+            tagValues,
             queryContext)
-        : tryGetTreeDeviceInCache(deviceEntryMap, tableInstance, check, fetchPaths, idValues);
+        : tryGetTreeDeviceInCache(deviceEntryMap, tableInstance, check, fetchPaths, tagValues);
   }
 
   private boolean tryGetTableDeviceInCache(
@@ -502,7 +503,8 @@ public class TableDeviceSchemaFetcher {
               LocalExecutionPlanner.getInstance().metadata,
               mppQueryContext.getTimeOut()
                   - (System.currentTimeMillis() - mppQueryContext.getStartTime()),
-              false);
+              false,
+              mppQueryContext.isDebug());
 
       if (executionResult.status.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
         throw new IoTDBRuntimeException(

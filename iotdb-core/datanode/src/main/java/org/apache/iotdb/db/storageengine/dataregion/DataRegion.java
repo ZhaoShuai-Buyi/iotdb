@@ -31,6 +31,7 @@ import org.apache.iotdb.commons.file.SystemFileFactory;
 import org.apache.iotdb.commons.path.IFullPath;
 import org.apache.iotdb.commons.path.MeasurementPath;
 import org.apache.iotdb.commons.schema.SchemaConstant;
+import org.apache.iotdb.commons.schema.table.Audit;
 import org.apache.iotdb.commons.schema.table.InformationSchema;
 import org.apache.iotdb.commons.schema.table.TsFileTableSchemaUtil;
 import org.apache.iotdb.commons.schema.table.TsTable;
@@ -155,6 +156,7 @@ import org.apache.iotdb.db.storageengine.rescon.memory.TimePartitionInfo;
 import org.apache.iotdb.db.storageengine.rescon.memory.TimePartitionManager;
 import org.apache.iotdb.db.storageengine.rescon.memory.TsFileResourceManager;
 import org.apache.iotdb.db.storageengine.rescon.quotas.DataNodeSpaceQuotaManager;
+import org.apache.iotdb.db.tools.DelayAnalyzer;
 import org.apache.iotdb.db.tools.settle.TsFileAndModSettleTool;
 import org.apache.iotdb.db.utils.CommonUtils;
 import org.apache.iotdb.db.utils.DateTimeUtils;
@@ -378,6 +380,9 @@ public class DataRegion implements IDataRegionForQuery {
   private ILoadDiskSelector ordinaryLoadDiskSelector;
   private ILoadDiskSelector pipeAndIoTV2LoadDiskSelector;
 
+  /** Delay analyzer for tracking data arrival delays and calculating safe watermarks */
+  private final DelayAnalyzer delayAnalyzer;
+
   /**
    * Construct a database processor.
    *
@@ -396,6 +401,14 @@ public class DataRegion implements IDataRegionForQuery {
     this.dataRegionId = new DataRegionId(Integer.parseInt(dataRegionIdString));
     this.databaseName = databaseName;
     this.fileFlushPolicy = fileFlushPolicy;
+    this.delayAnalyzer =
+        config.isEnableDelayAnalyzer()
+            ? new DelayAnalyzer(
+                config.getDelayAnalyzerWindowSize(),
+                config.getDelayAnalyzerMinWindowSize(),
+                config.getDelayAnalyzerMaxWindowSize(),
+                config.getDelayAnalyzerConfidenceLevel())
+            : null;
     acquireDirectBufferMemory();
 
     dataRegionSysDir = SystemFileFactory.INSTANCE.getFile(systemDir, dataRegionIdString);
@@ -462,6 +475,14 @@ public class DataRegion implements IDataRegionForQuery {
     partitionMaxFileVersions.put(0L, 0L);
     upgradeModFileThreadPool = null;
     this.metrics = new DataRegionMetrics(this);
+    this.delayAnalyzer =
+        config.isEnableDelayAnalyzer()
+            ? new DelayAnalyzer(
+                config.getDelayAnalyzerWindowSize(),
+                config.getDelayAnalyzerMinWindowSize(),
+                config.getDelayAnalyzerMaxWindowSize(),
+                config.getDelayAnalyzerConfidenceLevel())
+            : null;
 
     initDiskSelector();
   }
@@ -1160,6 +1181,12 @@ public class DataRegion implements IDataRegionForQuery {
       if (deleted) {
         return;
       }
+      if (delayAnalyzer != null) {
+        long arrivalTime = System.currentTimeMillis();
+        long generationTime = insertRowNode.getTime();
+        delayAnalyzer.update(generationTime, arrivalTime);
+      }
+
       // init map
       long timePartitionId = TimePartitionUtils.getTimePartitionId(insertRowNode.getTime());
       initFlushTimeMap(timePartitionId);
@@ -1344,6 +1371,13 @@ public class DataRegion implements IDataRegionForQuery {
         logger.info(
             "Won't insert tablet {}, because region is deleted", insertTabletNode.getSearchIndex());
         return;
+      }
+      if (delayAnalyzer != null) {
+        long arrivalTime = System.currentTimeMillis();
+        long[] times = insertTabletNode.getTimes();
+        for (long generationTime : times) {
+          delayAnalyzer.update(generationTime, arrivalTime);
+        }
       }
       TSStatus[] results = new TSStatus[insertTabletNode.getRowCount()];
       Arrays.fill(results, RpcUtils.SUCCESS_STATUS);
@@ -1940,37 +1974,47 @@ public class DataRegion implements IDataRegionForQuery {
   }
 
   /**
+   * close the TsFile represented by the given resource, thread-safe
+   *
+   * @param tsFileResource TsFile to be closed
+   * @return a future related to the close task
+   */
+  public Future<?> asyncCloseOneTsFileProcessor(TsFileResource tsFileResource) {
+    writeLock("asyncCloseOneTsFileProcessor");
+    try {
+      return asyncCloseOneTsFileProcessor(tsFileResource.isSeq(), tsFileResource.getProcessor());
+    } finally {
+      writeUnlock();
+    }
+  }
+
+  /**
    * close one tsfile processor, thread-safety should be ensured by caller
    *
    * @param sequence whether this tsfile processor is sequence or not
    * @param tsFileProcessor tsfile processor
    */
   public Future<?> asyncCloseOneTsFileProcessor(boolean sequence, TsFileProcessor tsFileProcessor) {
-    // for sequence tsfile, we update the endTimeMap only when the file is prepared to be closed.
-    // for unsequence tsfile, we have maintained the endTimeMap when an insertion comes.
-    if (closingSequenceTsFileProcessor.contains(tsFileProcessor)
-        || closingUnSequenceTsFileProcessor.contains(tsFileProcessor)
-        || tsFileProcessor.alreadyMarkedClosing()) {
+    if (tsFileProcessor == null) {
       return CompletableFuture.completedFuture(null);
     }
-    Future<?> future;
-    if (sequence) {
-      closingSequenceTsFileProcessor.add(tsFileProcessor);
-      future = tsFileProcessor.asyncClose();
-      if (future.isDone()) {
-        closingSequenceTsFileProcessor.remove(tsFileProcessor);
-      }
-
-      workSequenceTsFileProcessors.remove(tsFileProcessor.getTimeRangeId());
-    } else {
-      closingUnSequenceTsFileProcessor.add(tsFileProcessor);
-      future = tsFileProcessor.asyncClose();
-      if (future.isDone()) {
-        closingUnSequenceTsFileProcessor.remove(tsFileProcessor);
-      }
-
-      workUnsequenceTsFileProcessors.remove(tsFileProcessor.getTimeRangeId());
+    if (tsFileProcessor.getCloseFuture() != null) {
+      return tsFileProcessor.getCloseFuture();
     }
+
+    Future<?> future;
+    Set<TsFileProcessor> closingTsFileProcessors =
+        sequence ? closingSequenceTsFileProcessor : closingUnSequenceTsFileProcessor;
+    TreeMap<Long, TsFileProcessor> workTsFileProcessors =
+        sequence ? workSequenceTsFileProcessors : workUnsequenceTsFileProcessors;
+
+    closingTsFileProcessors.add(tsFileProcessor);
+    future = tsFileProcessor.asyncClose();
+    if (future.isDone()) {
+      closingTsFileProcessors.remove(tsFileProcessor);
+    }
+    workTsFileProcessors.remove(tsFileProcessor.getTimeRangeId());
+
     TsFileResource resource = tsFileProcessor.getTsFileResource();
     logger.info(
         "Async close tsfile: {}, file start time: {}, file end time: {}",
@@ -2009,7 +2053,7 @@ public class DataRegion implements IDataRegionForQuery {
   }
 
   public void deleteDALFolderAndClose() {
-    Optional.ofNullable(DeletionResourceManager.getInstance(dataRegionIdString))
+    Optional.ofNullable(DeletionResourceManager.getInstance(dataRegionId.getId()))
         .ifPresent(
             manager -> {
               manager.close();
@@ -2823,7 +2867,8 @@ public class DataRegion implements IDataRegionForQuery {
       deleteDataInUnsealedFiles(unsealedTsFileResource, deletion, sealedTsFileResource);
       // capture deleteDataNode and wait it to be persisted to DAL.
       DeletionResource deletionResource =
-          PipeInsertionDataNodeListener.getInstance().listenToDeleteData(dataRegionIdString, node);
+          PipeInsertionDataNodeListener.getInstance()
+              .listenToDeleteData(dataRegionId.getId(), node);
       // just get result. We have already waited for result in `listenToDeleteData`
       if (deletionResource != null && deletionResource.waitForResult() == Status.FAILURE) {
         throw deletionResource.getCause();
@@ -2926,7 +2971,8 @@ public class DataRegion implements IDataRegionForQuery {
 
       // capture deleteDataNode and wait it to be persisted to DAL.
       DeletionResource deletionResource =
-          PipeInsertionDataNodeListener.getInstance().listenToDeleteData(dataRegionIdString, node);
+          PipeInsertionDataNodeListener.getInstance()
+              .listenToDeleteData(dataRegionId.getId(), node);
       // just get result. We have already waited for result in `listenToDeleteData`
       if (deletionResource != null && deletionResource.waitForResult() == Status.FAILURE) {
         throw deletionResource.getCause();
@@ -2983,7 +3029,8 @@ public class DataRegion implements IDataRegionForQuery {
       deleteDataDirectlyInFile(unsealedTsFileResource, deletion);
       // capture deleteDataNode and wait it to be persisted to DAL.
       DeletionResource deletionResource =
-          PipeInsertionDataNodeListener.getInstance().listenToDeleteData(dataRegionIdString, node);
+          PipeInsertionDataNodeListener.getInstance()
+              .listenToDeleteData(dataRegionId.getId(), node);
       // just get result. We have already waited for result in `listenToDeleteData`
       if (deletionResource != null && deletionResource.waitForResult() == Status.FAILURE) {
         throw deletionResource.getCause();
@@ -3786,6 +3833,9 @@ public class DataRegion implements IDataRegionForQuery {
     if (databaseName.startsWith(SchemaConstant.AUDIT_DATABASE)) {
       return Optional.empty();
     }
+    if (databaseName.startsWith(Audit.TABLE_MODEL_AUDIT_DATABASE)) {
+      return Optional.empty();
+    }
     int lastIndex = databaseName.lastIndexOf("-");
     if (lastIndex == -1) {
       lastIndex = databaseName.length();
@@ -4154,7 +4204,7 @@ public class DataRegion implements IDataRegionForQuery {
 
     // Listen before the tsFile is added into tsFile manager to avoid it being compacted
     PipeInsertionDataNodeListener.getInstance()
-        .listenToTsFile(dataRegionIdString, databaseName, tsFileResource, true);
+        .listenToTsFile(dataRegionId.getId(), databaseName, tsFileResource, true);
 
     tsFileManager.add(tsFileResource, false);
 
@@ -4333,6 +4383,10 @@ public class DataRegion implements IDataRegionForQuery {
     return dataRegionIdString;
   }
 
+  public int getDataRegionId() {
+    return dataRegionId.getId();
+  }
+
   /**
    * Get the storageGroupPath with dataRegionId.
    *
@@ -4382,6 +4436,10 @@ public class DataRegion implements IDataRegionForQuery {
       Map<TsFileProcessor, InsertRowsNode> tsFileProcessorMap = new HashMap<>();
       for (int i = 0; i < insertRowsOfOneDeviceNode.getInsertRowNodeList().size(); i++) {
         InsertRowNode insertRowNode = insertRowsOfOneDeviceNode.getInsertRowNodeList().get(i);
+        if (delayAnalyzer != null) {
+          long arrivalTime = System.currentTimeMillis();
+          delayAnalyzer.update(insertRowNode.getTime(), arrivalTime);
+        }
         if (!CommonUtils.isAlive(insertRowNode.getTime(), ttl)) {
           // we do not need to write these part of data, as they can not be queried
           // or the sub-plan has already been executed, we are retrying other sub-plans
@@ -4501,6 +4559,10 @@ public class DataRegion implements IDataRegionForQuery {
       long[] timePartitionIds = new long[insertRowsNode.getInsertRowNodeList().size()];
       for (int i = 0; i < insertRowsNode.getInsertRowNodeList().size(); i++) {
         InsertRowNode insertRowNode = insertRowsNode.getInsertRowNodeList().get(i);
+        if (delayAnalyzer != null) {
+          long arrivalTime = System.currentTimeMillis();
+          delayAnalyzer.update(insertRowNode.getTime(), arrivalTime);
+        }
         long ttl = getTTL(insertRowNode);
         if (!CommonUtils.isAlive(insertRowNode.getTime(), ttl)) {
           insertRowsNode
@@ -4589,9 +4651,16 @@ public class DataRegion implements IDataRegionForQuery {
       // infoForMetrics[1]: ScheduleMemoryBlockTimeCost
       // infoForMetrics[2]: ScheduleWalTimeCost
       // infoForMetrics[3]: ScheduleMemTableTimeCost
-      // infoForMetrics[4]: InsertedPointsNumber
+      // infoForMetrics[4]: InsertedPointsNumbe
       for (int i = 0; i < insertMultiTabletsNode.getInsertTabletNodeList().size(); i++) {
         InsertTabletNode insertTabletNode = insertMultiTabletsNode.getInsertTabletNodeList().get(i);
+        long[] times = insertTabletNode.getTimes();
+        if (delayAnalyzer != null) {
+          for (long generationTime : times) {
+            long arrivalTime = System.currentTimeMillis();
+            delayAnalyzer.update(generationTime, arrivalTime);
+          }
+        }
         TSStatus[] results = new TSStatus[insertTabletNode.getRowCount()];
         Arrays.fill(results, RpcUtils.SUCCESS_STATUS);
         boolean noFailure = false;
@@ -4893,6 +4962,16 @@ public class DataRegion implements IDataRegionForQuery {
 
   public TsFileManager getTsFileManager() {
     return tsFileManager;
+  }
+
+  /**
+   * Get the delay analyzer instance for this data region
+   *
+   * @return DelayAnalyzer instance for tracking data arrival delays and calculating safe
+   *     watermarks, or null if delay analyzer is disabled
+   */
+  public DelayAnalyzer getDelayAnalyzer() {
+    return delayAnalyzer;
   }
 
   private long getTTL(InsertNode insertNode) {
