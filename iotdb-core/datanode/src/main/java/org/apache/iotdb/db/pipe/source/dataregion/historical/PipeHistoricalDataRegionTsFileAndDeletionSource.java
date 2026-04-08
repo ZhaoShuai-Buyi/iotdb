@@ -38,7 +38,7 @@ import org.apache.iotdb.commons.pipe.datastructure.pattern.TreePattern;
 import org.apache.iotdb.commons.pipe.datastructure.resource.PersistentResource;
 import org.apache.iotdb.commons.pipe.event.ProgressReportEvent;
 import org.apache.iotdb.commons.utils.PathUtils;
-import org.apache.iotdb.consensus.pipe.PipeConsensus;
+import org.apache.iotdb.consensus.pipe.IoTConsensusV2;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
 import org.apache.iotdb.db.consensus.DataRegionConsensusImpl;
 import org.apache.iotdb.db.pipe.consensus.ReplicateProgressDataNodeManager;
@@ -47,7 +47,7 @@ import org.apache.iotdb.db.pipe.consensus.deletion.DeletionResourceManager;
 import org.apache.iotdb.db.pipe.event.common.deletion.PipeDeleteDataNodeEvent;
 import org.apache.iotdb.db.pipe.event.common.terminate.PipeTerminateEvent;
 import org.apache.iotdb.db.pipe.event.common.tsfile.PipeTsFileInsertionEvent;
-import org.apache.iotdb.db.pipe.processor.pipeconsensus.PipeConsensusProcessor;
+import org.apache.iotdb.db.pipe.processor.iotconsensusv2.IoTConsensusV2Processor;
 import org.apache.iotdb.db.pipe.resource.PipeDataNodeResourceManager;
 import org.apache.iotdb.db.pipe.source.dataregion.DataRegionListeningFilter;
 import org.apache.iotdb.db.storageengine.StorageEngine;
@@ -490,7 +490,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
 
     final long startHistoricalExtractionTime = System.currentTimeMillis();
     dataRegion.writeLock(
-        "Pipe: start to extract historical TsFile and Deletion(if uses pipeConsensus)");
+        "Pipe: start to extract historical TsFile and Deletion(if uses iotConsensusV2)");
     try {
       List<PersistentResource> originalResourceList = new ArrayList<>();
 
@@ -875,8 +875,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
     filteredTsFileResources2TableNames.remove(resource);
 
     // if using IoTV2, assign a replicateIndex for this event
-    if (DataRegionConsensusImpl.getInstance() instanceof PipeConsensus
-        && PipeConsensusProcessor.isShouldReplicate(event)) {
+    if (DataRegionConsensusImpl.getInstance() instanceof IoTConsensusV2
+        && IoTConsensusV2Processor.isShouldReplicate(event)) {
       event.setReplicateIndexForIoTV2(
           ReplicateProgressDataNodeManager.assignReplicateIndexForIoTV2(pipeName));
       LOGGER.debug(
@@ -904,7 +904,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       return isReferenceCountIncreased ? event : null;
     } finally {
       try {
-        PipeDataNodeResourceManager.tsfile().unpinTsFileResource(resource, pipeName);
+        PipeDataNodeResourceManager.tsfile()
+            .unpinTsFileResource(resource, shouldTransferModFile, pipeName);
       } catch (final IOException e) {
         LOGGER.warn(
             "Pipe {}@{}: failed to unpin TsFileResource after creating event, original path: {}",
@@ -929,6 +930,18 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
             cliHostname,
             skipIfNoPrivileges,
             false);
+
+    // if using IoTV2, assign a replicateIndex for this historical deletion event
+    if (DataRegionConsensusImpl.getInstance() instanceof IoTConsensusV2
+        && IoTConsensusV2Processor.isShouldReplicate(event)) {
+      event.setReplicateIndexForIoTV2(
+          ReplicateProgressDataNodeManager.assignReplicateIndexForIoTV2(pipeName));
+      LOGGER.debug(
+          "[{}]Set {} for historical deletion event {}",
+          pipeName,
+          event.getReplicateIndexForIoTV2(),
+          event);
+    }
 
     if (sloppyPattern || isDbNameCoveredByPattern) {
       event.skipParsingPattern();
@@ -977,7 +990,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
             if (resource instanceof TsFileResource) {
               try {
                 PipeDataNodeResourceManager.tsfile()
-                    .unpinTsFileResource((TsFileResource) resource, pipeName);
+                    .unpinTsFileResource(
+                        (TsFileResource) resource, shouldTransferModFile, pipeName);
               } catch (final IOException e) {
                 LOGGER.warn(
                     "Pipe {}@{}: failed to unpin TsFileResource after dropping pipe, original path: {}",

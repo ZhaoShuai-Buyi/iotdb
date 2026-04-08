@@ -765,6 +765,15 @@ public class DataNode extends ServerCommandLine implements DataNodeMBean {
     }
   }
 
+  private void cleanupSortTmpDir() {
+    String sortTmpDir = config.getSortTmpDir();
+    File tmpDir = new File(sortTmpDir);
+    if (tmpDir.exists()) {
+      FileUtils.deleteFileOrDirectory(tmpDir, true);
+      logger.info("Cleaned up stale sort temp directory: {}", sortTmpDir);
+    }
+  }
+
   private void prepareResources() throws StartupException {
     prepareUDFResources();
     prepareTriggerResources();
@@ -794,7 +803,7 @@ public class DataNode extends ServerCommandLine implements DataNodeMBean {
           "SchemaRegion consensus start successfully, which takes {} ms.",
           (schemaRegionEndTime - startTime));
       schemaRegionConsensusStarted = true;
-      if (!isUsingPipeConsensus()) {
+      if (!isUsingIoTConsensusV2()) {
         DataRegionConsensusImpl.getInstance().start();
         long dataRegionEndTime = System.currentTimeMillis();
         logger.info(
@@ -818,6 +827,9 @@ public class DataNode extends ServerCommandLine implements DataNodeMBean {
     logger.info("Setting up IoTDB DataNode...");
     registerManager.register(new JMXService());
     JMXService.registerMBean(getInstance(), mbeanName);
+
+    // Clean up stale sort temp files left from previous runs
+    cleanupSortTmpDir();
 
     // Get resources for trigger,udf,pipe...
     prepareResources();
@@ -869,11 +881,11 @@ public class DataNode extends ServerCommandLine implements DataNodeMBean {
 
     registerManager.register(CompactionTaskManager.getInstance());
 
-    // Start PipeConsensus (DataRegionConsensus) before Internal RPC Service and Pipe Agent
+    // Start IoTConsensusV2 (DataRegionConsensus) before Internal RPC Service and Pipe Agent
     // recovery.
     // This ensures consensus groups are registered so that deleteLocalPeer() can succeed when
     // DELETE_OLD_REGION_PEER requests arrive during the pipe recovery phase.
-    if (isUsingPipeConsensus()) {
+    if (isUsingIoTConsensusV2()) {
       long dataRegionStartTime = System.currentTimeMillis();
       while (!StorageEngine.getInstance().isReadyForNonReadWriteFunctions()) {
         try {
@@ -978,7 +990,7 @@ public class DataNode extends ServerCommandLine implements DataNodeMBean {
     return new TDataNodeConfiguration(location, resource);
   }
 
-  private boolean isUsingPipeConsensus() {
+  private boolean isUsingIoTConsensusV2() {
     return config.getDataRegionConsensusProtocolClass().equals(ConsensusFactory.IOT_CONSENSUS_V2);
   }
 

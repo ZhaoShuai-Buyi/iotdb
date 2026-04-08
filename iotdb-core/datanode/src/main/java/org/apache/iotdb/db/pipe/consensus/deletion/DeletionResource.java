@@ -43,7 +43,7 @@ import java.util.function.Consumer;
 /**
  * DeletionResource is designed for IoTConsensusV2 to manage the lifecycle of all deletion
  * operations including realtime deletion and historical deletion. In order to be compatible with
- * user pipe framework, PipeConsensus will use {@link PipeDeleteDataNodeEvent}
+ * user pipe framework, IoTConsensusV2 will use {@link PipeDeleteDataNodeEvent}
  */
 public class DeletionResource implements PersistentResource {
   private static final Logger LOGGER = LoggerFactory.getLogger(DeletionResource.class);
@@ -70,10 +70,9 @@ public class DeletionResource implements PersistentResource {
   }
 
   public synchronized void decreaseReference() {
-    if (pipeTaskReferenceCount.get() == 1) {
+    if (pipeTaskReferenceCount.decrementAndGet() == 0) {
       removeSelf();
     }
-    pipeTaskReferenceCount.decrementAndGet();
   }
 
   public void removeSelf() {

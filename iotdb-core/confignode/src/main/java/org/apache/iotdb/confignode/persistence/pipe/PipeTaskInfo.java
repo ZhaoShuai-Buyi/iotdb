@@ -563,6 +563,20 @@ public class PipeTaskInfo implements SnapshotProcessor {
     }
   }
 
+  public Map<String, PipeStatus> getConsensusPipeStatusMap() {
+    acquireReadLock();
+    try {
+      return StreamSupport.stream(pipeMetaKeeper.getPipeMetaList().spliterator(), false)
+          .filter(pipeMeta -> PipeType.CONSENSUS.equals(pipeMeta.getStaticMeta().getPipeType()))
+          .collect(
+              Collectors.toMap(
+                  pipeMeta -> pipeMeta.getStaticMeta().getPipeName(),
+                  pipeMeta -> pipeMeta.getRuntimeMeta().getStatus().get()));
+    } finally {
+      releaseReadLock();
+    }
+  }
+
   public boolean isEmpty() {
     acquireReadLock();
     try {
@@ -943,8 +957,33 @@ public class PipeTaskInfo implements SnapshotProcessor {
       try (final FileInputStream fileInputStream = new FileInputStream(snapshotFile)) {
         pipeMetaKeeper.processLoadSnapshot(fileInputStream);
       }
+      normalizeRecoveredConsensusPipeStatus();
     } finally {
       releaseWriteLock();
+    }
+  }
+
+  private void normalizeRecoveredConsensusPipeStatus() {
+    final List<String> restartedConsensusPipes = new ArrayList<>();
+
+    pipeMetaKeeper
+        .getPipeMetaList()
+        .forEach(
+            pipeMeta -> {
+              final PipeRuntimeMeta runtimeMeta = pipeMeta.getRuntimeMeta();
+              if (!PipeType.CONSENSUS.equals(pipeMeta.getStaticMeta().getPipeType())
+                  || !PipeStatus.STOPPED.equals(runtimeMeta.getStatus().get())
+                  || runtimeMeta.getIsStoppedByRuntimeException()) {
+                return;
+              }
+
+              runtimeMeta.getStatus().set(PipeStatus.RUNNING);
+              restartedConsensusPipes.add(pipeMeta.getStaticMeta().getPipeName());
+            });
+
+    if (!restartedConsensusPipes.isEmpty()) {
+      LOGGER.info(
+          "Recovered consensus pipes {} as RUNNING during snapshot load.", restartedConsensusPipes);
     }
   }
 
