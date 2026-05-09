@@ -33,6 +33,7 @@ import org.apache.iotdb.commons.pipe.agent.task.meta.PipeTaskMeta;
 import org.apache.iotdb.commons.pipe.config.PipeConfig;
 import org.apache.iotdb.commons.pipe.datastructure.pattern.TablePattern;
 import org.apache.iotdb.commons.pipe.datastructure.pattern.TreePattern;
+import org.apache.iotdb.commons.pipe.resource.log.PipeLogger;
 import org.apache.iotdb.commons.pipe.resource.ref.PipePhantomReferenceManager.PipeEventResource;
 import org.apache.iotdb.db.auth.AuthorityChecker;
 import org.apache.iotdb.db.pipe.event.ReferenceTrackableEvent;
@@ -99,6 +100,7 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
 
   protected volatile ProgressIndex overridingProgressIndex;
   private Set<String> tableNames;
+  private String tsFileDedupScopeID;
 
   // This is set to check the tsFile paths by privilege
   private Map<IDeviceID, String[]> treeSchemaMap;
@@ -398,11 +400,24 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
   }
 
   public void eliminateProgressIndex() {
-    if (Objects.isNull(overridingProgressIndex) && Objects.nonNull(resource)) {
+    if (Objects.isNull(overridingProgressIndex)
+        && Objects.nonNull(resource)
+        && Objects.nonNull(tsFileDedupScopeID)) {
       PipeTsFileEpochProgressIndexKeeper.getInstance()
           .eliminateProgressIndex(
-              Integer.parseInt(resource.getDataRegionId()), pipeName, resource.getTsFilePath());
+              Integer.parseInt(resource.getDataRegionId()),
+              tsFileDedupScopeID,
+              resource.getTsFilePath());
     }
+  }
+
+  public PipeTsFileInsertionEvent bindTsFileDedupScopeID(final String tsFileDedupScopeID) {
+    this.tsFileDedupScopeID = tsFileDedupScopeID;
+    return this;
+  }
+
+  public String getTsFileDedupScopeID() {
+    return tsFileDedupScopeID;
   }
 
   @Override
@@ -419,25 +434,26 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
       final long startTime,
       final long endTime) {
     return new PipeTsFileInsertionEvent(
-        getRawIsTableModelEvent(),
-        getSourceDatabaseNameFromDataRegion(),
-        resource,
-        tsFile,
-        isWithMod,
-        isLoaded,
-        isGeneratedByHistoricalExtractor,
-        tableNames,
-        pipeName,
-        creationTime,
-        pipeTaskMeta,
-        treePattern,
-        tablePattern,
-        userId,
-        userName,
-        cliHostname,
-        skipIfNoPrivileges,
-        startTime,
-        endTime);
+            getRawIsTableModelEvent(),
+            getSourceDatabaseNameFromDataRegion(),
+            resource,
+            tsFile,
+            isWithMod,
+            isLoaded,
+            isGeneratedByHistoricalExtractor,
+            tableNames,
+            pipeName,
+            creationTime,
+            pipeTaskMeta,
+            treePattern,
+            tablePattern,
+            userId,
+            userName,
+            cliHostname,
+            skipIfNoPrivileges,
+            startTime,
+            endTime)
+        .bindTsFileDedupScopeID(tsFileDedupScopeID);
   }
 
   @Override
@@ -657,8 +673,7 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
                 callerName,
                 getTsFile(),
                 tabletEventCount,
-                retryCount,
-                e);
+                retryCount);
           } else if (LOGGER.isDebugEnabled()) {
             LOGGER.debug(
                 "{}: failed to allocate memory for parsing TsFile {}, tablet event no. {}, retry count is {}, will keep retrying.",
@@ -704,7 +719,11 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
                   "Interrupted when waiting for closing TsFile %s.", resource.getTsFilePath())
               : String.format(
                   "Parse TsFile %s error. Because: %s", resource.getTsFilePath(), e.getMessage());
-      LOGGER.warn(errorMsg, e);
+      if (e instanceof PipeRuntimeOutOfMemoryCriticalException) {
+        PipeLogger.log(LOGGER::warn, errorMsg);
+      } else {
+        PipeLogger.log(LOGGER::warn, e, errorMsg);
+      }
       throw new PipeException(errorMsg, e);
     }
   }
@@ -728,28 +747,29 @@ public class PipeTsFileInsertionEvent extends PipeInsertionEvent
       final double waitTimeSeconds = (currentTime - startTime) / 1000.0;
       if (elapsedRecordTimeSeconds > 10.0) {
         LOGGER.info(
-            "Wait for resource enough for parsing {} for {} seconds.",
+            "Wait for memory enough for parsing {} for {} seconds.",
             resource != null ? resource.getTsFilePath() : "tsfile",
             waitTimeSeconds);
         lastRecordTime = currentTime;
       } else if (LOGGER.isDebugEnabled()) {
         LOGGER.debug(
-            "Wait for resource enough for parsing {} for {} seconds.",
+            "Wait for memory enough for parsing {} for {} seconds.",
             resource != null ? resource.getTsFilePath() : "tsfile",
             waitTimeSeconds);
       }
 
       if (waitTimeSeconds * 1000 > timeoutMs) {
         // should contain 'TimeoutException' in exception message
-        throw new PipeException(
-            String.format("TimeoutException: Waited %s seconds", waitTimeSeconds));
+        throw new PipeRuntimeOutOfMemoryCriticalException(
+            String.format(
+                "TimeoutException: Waited %s seconds for memory to parse TsFile", waitTimeSeconds));
       }
     }
 
     final long currentTime = System.currentTimeMillis();
     final double waitTimeSeconds = (currentTime - startTime) / 1000.0;
     LOGGER.info(
-        "Wait for resource enough for parsing {} for {} seconds.",
+        "Wait for memory enough for parsing {} for {} seconds.",
         resource != null ? resource.getTsFilePath() : "tsfile",
         waitTimeSeconds);
   }

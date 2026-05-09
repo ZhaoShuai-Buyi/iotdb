@@ -443,7 +443,7 @@ public class PipeDescriptor {
                 "rate_limiter_hot_reload_check_interval_ms",
                 String.valueOf(config.getRateLimiterHotReloadCheckIntervalMs()))));
 
-    config.setPipeConnectorRequestSliceThresholdBytes(
+    config.setPipeSinkRequestSliceThresholdBytes(
         Integer.parseInt(
             properties.getProperty(
                 "pipe_connector_request_slice_threshold_bytes",
@@ -464,6 +464,11 @@ public class PipeDescriptor {
             properties.getProperty(
                 "pipe_receiver_req_decompressed_max_length_in_bytes",
                 String.valueOf(config.getPipeReceiverReqDecompressedMaxLengthInBytes()))));
+    config.setPipeAirGapReceiverMaxPayloadSizeInBytes(
+        Integer.parseInt(
+            properties.getProperty(
+                "pipe_air_gap_receiver_max_payload_size_in_bytes",
+                String.valueOf(config.getPipeAirGapReceiverMaxPayloadSizeInBytes()))));
     config.setPipeReceiverLoadConversionEnabled(
         Boolean.parseBoolean(
             properties.getProperty(
@@ -607,7 +612,7 @@ public class PipeDescriptor {
             "pipe_async_connector_selector_number",
             isHotModify);
     if (value != null) {
-      config.setPipeAsyncConnectorSelectorNumber(Integer.parseInt(value));
+      config.setPipeAsyncSinkSelectorNumber(Integer.parseInt(value));
     }
 
     value =
@@ -617,7 +622,7 @@ public class PipeDescriptor {
             "pipe_async_connector_max_client_number",
             isHotModify);
     if (value != null) {
-      config.setPipeAsyncConnectorMaxClientNumber(Integer.parseInt(value));
+      config.setPipeAsyncSinkMaxClientNumber(Integer.parseInt(value));
     }
 
     value =
@@ -627,7 +632,7 @@ public class PipeDescriptor {
             "pipe_async_connector_max_tsfile_client_number",
             isHotModify);
     if (value != null) {
-      config.setPipeAsyncConnectorMaxTsFileClientNumber(Integer.parseInt(value));
+      config.setPipeAsyncSinkMaxTsFileClientNumber(Integer.parseInt(value));
     }
 
     value =
