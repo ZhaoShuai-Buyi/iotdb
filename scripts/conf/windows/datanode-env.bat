@@ -20,7 +20,8 @@
 @echo off
 
 @REM You can set datanode memory size, example '2G' or '2048M'
-set MEMORY_SIZE=
+@REM If the MEMORY_SIZE environment variable is already set, its value will be used.
+if not defined MEMORY_SIZE set MEMORY_SIZE=
 
 @REM true or false
 @REM DO NOT FORGET TO MODIFY THE PASSWORD FOR SECURITY (%IOTDB_CONF%\jmx.password and %{IOTDB_CONF%\jmx.access)
@@ -181,6 +182,15 @@ IF "%JAVA_VERSION%" == "8" (
      --add-opens=java.base/java.nio=ALL-UNNAMED^
      --add-opens=java.base/java.io=ALL-UNNAMED^
      --add-opens=java.base/java.net=ALL-UNNAMED
+)
+
+@REM Apply tsfile locale option populated by Maven at package time
+@REM (see conf\windows\iotdb-common.bat; empty in default build, -Dtsfile.locale=zh under with-zh-locale).
+IF EXIST "%IOTDB_CONF%\windows\iotdb-common.bat" (
+    CALL "%IOTDB_CONF%\windows\iotdb-common.bat"
+    IF NOT "%TSFILE_LOCALE_JVM_OPT%"=="" (
+        set IOTDB_JMX_OPTS=%IOTDB_JMX_OPTS% %TSFILE_LOCALE_JVM_OPT%
+    )
 )
 
 echo DataNode on heap memory size = %ON_HEAP_MEMORY%B, off heap memory size = %OFF_HEAP_MEMORY%B

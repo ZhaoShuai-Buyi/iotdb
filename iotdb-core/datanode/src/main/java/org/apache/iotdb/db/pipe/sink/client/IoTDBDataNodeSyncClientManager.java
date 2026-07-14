@@ -26,6 +26,7 @@ import org.apache.iotdb.commons.pipe.sink.client.IoTDBSyncClient;
 import org.apache.iotdb.commons.pipe.sink.client.IoTDBSyncClientManager;
 import org.apache.iotdb.commons.pipe.sink.payload.thrift.request.PipeTransferHandshakeV2Req;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
+import org.apache.iotdb.db.i18n.DataNodePipeMessages;
 import org.apache.iotdb.db.pipe.sink.payload.evolvable.request.PipeTransferDataNodeHandshakeV1Req;
 import org.apache.iotdb.db.pipe.sink.payload.evolvable.request.PipeTransferDataNodeHandshakeV2Req;
 
@@ -48,6 +49,8 @@ public class IoTDBDataNodeSyncClientManager extends IoTDBSyncClientManager
       final boolean useSSL,
       final String trustStorePath,
       final String trustStorePwd,
+      final String keyStorePath,
+      final String keyStorePwd,
       /* The following parameters are used locally. */
       final boolean useLeaderCache,
       final String loadBalanceStrategy,
@@ -64,6 +67,8 @@ public class IoTDBDataNodeSyncClientManager extends IoTDBSyncClientManager
         useSSL,
         trustStorePath,
         trustStorePwd,
+        keyStorePath,
+        keyStorePwd,
         useLeaderCache,
         loadBalanceStrategy,
         userEntity,
@@ -128,7 +133,7 @@ public class IoTDBDataNodeSyncClientManager extends IoTDBSyncClientManager
       LEADER_CACHE_MANAGER.updateLeaderEndPoint(deviceId, endPoint);
     } catch (final Exception e) {
       LOGGER.warn(
-          "Failed to update leader cache for device {} with endpoint {}:{}.",
+          DataNodePipeMessages.FAILED_TO_UPDATE_LEADER_CACHE_FOR_DEVICE,
           deviceId,
           endPoint.getIp(),
           endPoint.getPort(),

@@ -22,6 +22,7 @@ package org.apache.iotdb.db.pipe.sink.protocol.opcua;
 import org.apache.iotdb.commons.consensus.DataRegionId;
 import org.apache.iotdb.commons.utils.PathUtils;
 import org.apache.iotdb.db.conf.IoTDBConfig;
+import org.apache.iotdb.db.i18n.DataNodePipeMessages;
 import org.apache.iotdb.db.pipe.event.common.tablet.PipeInsertNodeTabletInsertionEvent;
 import org.apache.iotdb.db.pipe.event.common.tablet.PipeRawTabletInsertionEvent;
 import org.apache.iotdb.db.pipe.sink.protocol.opcua.client.ClientRunner;
@@ -189,7 +190,8 @@ public class OpcUaSink implements PipeConnector {
       validator.validate(
           CONNECTOR_OPC_UA_MODEL_CLIENT_SERVER_VALUE::equals,
           String.format(
-              "When the OPC UA sink points to an outer server or sets 'with-quality' to true, the %s or %s must be %s.",
+              DataNodePipeMessages
+                  .OPC_UA_SINK_MODEL_MUST_BE_CLIENT_SERVER_WHEN_OUTER_OR_WITH_QUALITY,
               CONNECTOR_OPC_UA_MODEL_KEY,
               SINK_OPC_UA_MODEL_KEY,
               CONNECTOR_OPC_UA_MODEL_CLIENT_SERVER_VALUE),
@@ -243,8 +245,7 @@ public class OpcUaSink implements PipeConnector {
     databaseName = Objects.nonNull(region) ? region.getDatabaseName() : "root.__temp_db";
 
     if (withQuality && PathUtils.isTableModelDatabase(databaseName)) {
-      throw new PipeException(
-          "When the OPC UA sink sets 'with-quality' to true, the table model data is not supported.");
+      throw new PipeException(DataNodePipeMessages.WHEN_THE_OPC_UA_SINK_SETS_WITH);
     }
 
     nodeUrl = parameters.getStringByKeys(CONNECTOR_OPC_UA_NODE_URL_KEY, SINK_OPC_UA_NODE_URL_KEY);
@@ -252,8 +253,7 @@ public class OpcUaSink implements PipeConnector {
       customizeServer(parameters);
     } else {
       if (PathUtils.isTableModelDatabase(databaseName)) {
-        throw new PipeException(
-            "When the OPC UA sink points to an outer server, the table model data is not supported.");
+        throw new PipeException(DataNodePipeMessages.WHEN_THE_OPC_UA_SINK_POINTS_TO);
       }
       customizeClient(parameters);
     }
@@ -309,7 +309,7 @@ public class OpcUaSink implements PipeConnector {
             .map(this::getSecurityPolicy)
             .collect(Collectors.toSet());
     if (securityPolicies.isEmpty()) {
-      throw new PipeException("The security policy cannot be empty.");
+      throw new PipeException(DataNodePipeMessages.THE_SECURITY_POLICY_CANNOT_BE_EMPTY);
     }
     final long debounceTimeMs =
         parameters.getLongOrDefault(
@@ -356,7 +356,8 @@ public class OpcUaSink implements PipeConnector {
                     } catch (final PipeException e) {
                       throw e;
                     } catch (final Exception e) {
-                      throw new PipeException("Failed to build and startup OpcUaServer", e);
+                      throw new PipeException(
+                          DataNodePipeMessages.FAILED_TO_BUILD_AND_STARTUP_OPCUASERVER, e);
                     }
                   })
               .getRight();
@@ -444,8 +445,7 @@ public class OpcUaSink implements PipeConnector {
       case CONNECTOR_OPC_UA_SECURITY_POLICY_AES256_SHA256_RSAPSS_VALUE:
         return SecurityPolicy.Aes256_Sha256_RsaPss;
       default:
-        throw new PipeException(
-            "The security policy can only be 'None', 'Basic128Rsa15', 'Basic256', 'Basic256Sha256', 'Aes128_Sha256_RsaOaep' or 'Aes256_Sha256_RsaPss'.");
+        throw new PipeException(DataNodePipeMessages.THE_SECURITY_POLICY_CAN_ONLY_BE_NONE);
     }
   }
 
@@ -458,7 +458,7 @@ public class OpcUaSink implements PipeConnector {
       case CONNECTOR_OPC_UA_DEFAULT_QUALITY_UNCERTAIN_VALUE:
         return StatusCode.UNCERTAIN;
       default:
-        throw new PipeException("The default quality can only be 'GOOD', 'BAD' or 'UNCERTAIN'.");
+        throw new PipeException(DataNodePipeMessages.THE_DEFAULT_QUALITY_CAN_ONLY_BE_GOOD);
     }
   }
 
@@ -488,8 +488,7 @@ public class OpcUaSink implements PipeConnector {
           } else if (Objects.nonNull(client)) {
             client.transfer(tablet, this);
           } else {
-            throw new PipeException(
-                "No OPC client or server is specified when transferring tablet");
+            throw new PipeException(DataNodePipeMessages.NO_OPC_CLIENT_OR_SERVER_IS_SPECIFIED);
           }
         });
   }
@@ -503,9 +502,8 @@ public class OpcUaSink implements PipeConnector {
     if (!(tabletInsertionEvent instanceof PipeInsertNodeTabletInsertionEvent)
         && !(tabletInsertionEvent instanceof PipeRawTabletInsertionEvent)) {
       logger.warn(
-          "This Connector only support "
-              + "PipeInsertNodeTabletInsertionEvent and PipeRawTabletInsertionEvent. "
-              + "Ignore {}.",
+          DataNodePipeMessages
+              .THIS_CONNECTOR_ONLY_SUPPORT_PIPEINSERTNODETABLETINSERTIONEVENT_AND_PIPERAWTABLET,
           tabletInsertionEvent);
       return;
     }

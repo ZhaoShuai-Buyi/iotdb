@@ -22,6 +22,8 @@ package org.apache.iotdb.commons.schema.table;
 import org.apache.iotdb.commons.conf.CommonDescriptor;
 import org.apache.iotdb.commons.exception.MetadataException;
 import org.apache.iotdb.commons.exception.runtime.SchemaExecutionException;
+import org.apache.iotdb.commons.i18n.CommonMessages;
+import org.apache.iotdb.commons.i18n.SchemaMessages;
 import org.apache.iotdb.commons.schema.table.column.TimeColumnSchema;
 import org.apache.iotdb.commons.schema.table.column.TsTableColumnCategory;
 import org.apache.iotdb.commons.schema.table.column.TsTableColumnSchema;
@@ -93,6 +95,23 @@ public class TsTable {
 
   // Initiated during creation and never changed the reference
   private transient TsTableColumnSchema timeColumnSchema;
+
+  public enum TsTableMarker {
+
+    // do not use the -2 as the marker, reserve for writable view
+    NON_COMMIT_TABLE_MARKER(-1),
+    PRE_DELETE_TABLE_MARKER(-3);
+
+    private final int type;
+
+    TsTableMarker(int type) {
+      this.type = type;
+    }
+
+    public int getType() {
+      return type;
+    }
+  }
 
   public TsTable(final String tableName) {
     this.tableName = tableName;
@@ -263,7 +282,8 @@ public class TsTable {
           final TsTableColumnSchema columnSchema = columnSchemaMap.get(columnName);
           if (columnSchema != null
               && columnSchema.getColumnCategory().equals(TsTableColumnCategory.TAG)) {
-            throw new SchemaExecutionException("Cannot remove an tag column: " + columnName);
+            throw new SchemaExecutionException(
+                SchemaMessages.CANNOT_REMOVE_TAG_COLUMN + columnName);
           } else if (columnSchema != null) {
             columnSchemaMap.remove(columnName);
             if (columnSchema.getColumnCategory().equals(TsTableColumnCategory.FIELD)) {
@@ -388,8 +408,11 @@ public class TsTable {
   public static TsTable deserialize(final InputStream inputStream) throws IOException {
     final String name = ReadWriteIOUtils.readString(inputStream);
     final int columnNum = ReadWriteIOUtils.readInt(inputStream);
-    if (columnNum < 0) {
+    if (columnNum == TsTableMarker.NON_COMMIT_TABLE_MARKER.getType()) {
       return new NonCommittableTsTable(name);
+    }
+    if (columnNum == TsTableMarker.PRE_DELETE_TABLE_MARKER.getType()) {
+      return new PreDeleteTsTable(name);
     }
     final TsTable table = new TsTable(name);
     for (int i = 0; i < columnNum; i++) {
@@ -402,8 +425,11 @@ public class TsTable {
   public static TsTable deserialize(final ByteBuffer buffer) {
     final String name = ReadWriteIOUtils.readString(buffer);
     final int columnNum = ReadWriteIOUtils.readInt(buffer);
-    if (columnNum < 0) {
+    if (columnNum == TsTableMarker.NON_COMMIT_TABLE_MARKER.getType()) {
       return new NonCommittableTsTable(name);
+    }
+    if (columnNum == TsTableMarker.PRE_DELETE_TABLE_MARKER.getType()) {
+      return new PreDeleteTsTable(name);
     }
     final TsTable table = new TsTable(name);
     for (int i = 0; i < columnNum; i++) {
@@ -418,7 +444,7 @@ public class TsTable {
   }
 
   public void checkTableNameAndObjectNames4Object() throws MetadataException {
-    throw new MetadataException("The object type column is not supported.");
+    throw new MetadataException(CommonMessages.OBJECT_TYPE_COLUMN_NOT_SUPPORTED);
   }
 
   @Override

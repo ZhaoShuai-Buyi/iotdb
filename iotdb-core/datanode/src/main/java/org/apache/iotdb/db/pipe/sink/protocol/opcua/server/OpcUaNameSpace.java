@@ -24,6 +24,7 @@ import org.apache.iotdb.commons.exception.pipe.PipeRuntimeNonCriticalException;
 import org.apache.iotdb.commons.pipe.resource.log.PipeLogger;
 import org.apache.iotdb.commons.queryengine.utils.DateTimeUtils;
 import org.apache.iotdb.commons.queryengine.utils.TimestampPrecisionUtils;
+import org.apache.iotdb.db.i18n.DataNodePipeMessages;
 import org.apache.iotdb.db.pipe.sink.protocol.opcua.OpcUaSink;
 import org.apache.iotdb.db.pipe.sink.util.sorter.PipeTableModelTabletEventSorter;
 import org.apache.iotdb.db.pipe.sink.util.sorter.PipeTreeModelTabletEventSorter;
@@ -213,7 +214,8 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
       final List<Object> values,
       final OpcUaSink sink) {
     if (segments.length == 0) {
-      throw new PipeRuntimeCriticalException("The segments of tablets must exist");
+      throw new PipeRuntimeCriticalException(
+          DataNodePipeMessages.THE_SEGMENTS_OF_TABLETS_MUST_EXIST);
     }
     final StringBuilder currentStr = new StringBuilder();
     UaNode folderNode = null;
@@ -260,7 +262,8 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
                     () ->
                         new PipeRuntimeCriticalException(
                             String.format(
-                                "The folder node for %s does not exist.",
+                                DataNodePipeMessages
+                                    .PIPE_EXCEPTION_THE_FOLDER_NODE_FOR_S_DOES_NOT_EXIST_CC0776AE,
                                 Arrays.toString(segments))));
       }
     }
@@ -281,7 +284,7 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
       if (Objects.nonNull(sink.getQualityName()) && sink.getQualityName().equals(name)) {
         if (!type.equals(TSDataType.BOOLEAN)) {
           throw new UnsupportedOperationException(
-              "The quality value only supports boolean type, while true == GOOD and false == BAD.");
+              DataNodePipeMessages.THE_QUALITY_VALUE_ONLY_SUPPORTS_BOOLEAN_TYPE);
         }
         currentQuality = values.get(i) == Boolean.TRUE ? StatusCode.GOOD : StatusCode.BAD;
         continue;
@@ -289,7 +292,7 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
       if (Objects.nonNull(sink.getValueName()) && !sink.getValueName().equals(name)) {
         PipeLogger.log(
             LOGGER::warn,
-            "When the 'with-quality' mode is enabled, the measurement must be either \"value-name\" or \"quality-name\"");
+            DataNodePipeMessages.WITH_QUALITY_MEASUREMENT_MUST_BE_VALUE_OR_QUALITY_NAME);
         continue;
       }
       final UaVariableNode measurementNode;
@@ -374,7 +377,10 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
                   .orElseThrow(
                       () ->
                           new PipeRuntimeCriticalException(
-                              String.format("The Node %s does not exist.", nodeId)));
+                              String.format(
+                                  DataNodePipeMessages
+                                      .PIPE_EXCEPTION_THE_NODE_S_DOES_NOT_EXIST_52F98935,
+                                  nodeId)));
     }
     return measurementNode;
   }
@@ -401,7 +407,7 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
       case STRING:
         return ((Binary[]) column)[rowIndex].toString();
       default:
-        throw new UnSupportedDataTypeException("UnSupported dataType " + type);
+        throw new UnSupportedDataTypeException(DataNodePipeMessages.UNSUPPORTED_DATATYPE + type);
     }
   }
 
@@ -458,7 +464,7 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
 
       for (int rowIndex = 0; rowIndex < tablet.getRowSize(); ++rowIndex) {
         // Filter null value
-        if (tablet.getBitMaps()[columnIndex].isMarked(rowIndex)) {
+        if (tablet.isNull(rowIndex, columnIndex)) {
           continue;
         }
 
@@ -526,7 +532,8 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
           case UNKNOWN:
           default:
             throw new PipeRuntimeNonCriticalException(
-                "Unsupported data type: " + tablet.getSchemas().get(columnIndex).getType());
+                DataNodePipeMessages.UNSUPPORTED_DATA_TYPE
+                    + tablet.getSchemas().get(columnIndex).getType());
         }
 
         // Send the event
@@ -559,7 +566,8 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
       case OBJECT:
       case UNKNOWN:
       default:
-        throw new PipeRuntimeNonCriticalException("Unsupported data type: " + type);
+        throw new PipeRuntimeNonCriticalException(
+            DataNodePipeMessages.UNSUPPORTED_DATA_TYPE + type);
     }
   }
 
@@ -608,7 +616,9 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
                         } catch (Exception e) {
                           // Single client push failure does not affect other clients
                           LOGGER.warn(
-                              "Failed to push value change to client, nodeId={}", nodeId, e);
+                              DataNodePipeMessages.FAILED_TO_PUSH_VALUE_CHANGE_TO_CLIENT,
+                              nodeId,
+                              e);
                         }
                       }
                     } finally {
@@ -653,7 +663,7 @@ public class OpcUaNameSpace extends ManagedNamespaceWithLifecycle {
           item.setValue(node.getValue());
         }
       } catch (Exception e) {
-        LOGGER.warn("Failed to send initial value to new subscription, nodeId={}", nodeId, e);
+        LOGGER.warn(DataNodePipeMessages.FAILED_TO_SEND_INITIAL_VALUE_TO_NEW, nodeId, e);
       }
     }
   }

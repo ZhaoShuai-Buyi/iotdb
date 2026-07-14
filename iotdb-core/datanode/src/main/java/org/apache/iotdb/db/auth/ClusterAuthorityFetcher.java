@@ -48,6 +48,7 @@ import org.apache.iotdb.confignode.rpc.thrift.TLoginReq;
 import org.apache.iotdb.confignode.rpc.thrift.TPathPrivilege;
 import org.apache.iotdb.confignode.rpc.thrift.TPermissionInfoResp;
 import org.apache.iotdb.confignode.rpc.thrift.TRoleResp;
+import org.apache.iotdb.db.i18n.DataNodeMiscMessages;
 import org.apache.iotdb.db.protocol.client.ConfigNodeClient;
 import org.apache.iotdb.db.protocol.client.ConfigNodeClientManager;
 import org.apache.iotdb.db.protocol.client.ConfigNodeInfo;
@@ -56,6 +57,7 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.RelationalAuthorS
 import org.apache.iotdb.db.queryengine.plan.relational.type.AuthorRType;
 import org.apache.iotdb.db.queryengine.plan.statement.StatementType;
 import org.apache.iotdb.db.queryengine.plan.statement.sys.AuthorStatement;
+import org.apache.iotdb.db.schemaengine.lease.MetadataLeaseManager;
 import org.apache.iotdb.rpc.RpcUtils;
 import org.apache.iotdb.rpc.TSStatusCode;
 
@@ -423,44 +425,31 @@ public class ClusterAuthorityFetcher implements IAuthorityFetcher {
 
   @Override
   public SettableFuture<ConfigTaskResult> operatePermission(AuthorStatement authorStatement) {
-    return handleAccountUnlock(
-        authorStatement,
-        authorStatement.getUserName(),
-        false,
-        () -> onOperatePermissionSuccess(authorStatement));
+    return handleAccountUnlock(authorStatement, false);
   }
 
   @Override
   public SettableFuture<ConfigTaskResult> operatePermission(
       RelationalAuthorStatement authorStatement) {
-    return handleAccountUnlock(
-        authorStatement,
-        authorStatement.getUserName(),
-        true,
-        () -> onOperatePermissionSuccess(authorStatement));
+    return handleAccountUnlock(authorStatement, true);
   }
 
   private SettableFuture<ConfigTaskResult> handleAccountUnlock(
-      Object authorStatement, String username, boolean isRelational, Runnable successCallback) {
+      Object authorStatement, boolean isRelational) {
 
     if (isUnlockStatement(authorStatement, isRelational)) {
-      final SettableFuture<ConfigTaskResult> future = SettableFuture.create();
-      final User user;
-      try {
-        user = getUser(username, false);
-      } catch (final IoTDBRuntimeException e) {
-        future.setException(e);
-        return future;
-      }
       String loginAddr =
           isRelational
               ? ((RelationalAuthorStatement) authorStatement).getLoginAddr()
               : ((AuthorStatement) authorStatement).getLoginAddr();
 
-      LoginLockManager.getInstance().unlock(user.getUserId(), loginAddr);
-      successCallback.run();
-      future.set(new ConfigTaskResult(TSStatusCode.SUCCESS_STATUS));
-      return future;
+      // Reuse roleName to carry the optional login address for the internal unlock broadcast.
+      if (isRelational) {
+        ((RelationalAuthorStatement) authorStatement).setRoleName(loginAddr);
+      } else {
+        ((AuthorStatement) authorStatement).setRoleName(loginAddr);
+      }
+      return operatePermissionInternal(authorStatement, isRelational);
     }
     return operatePermissionInternal(authorStatement, isRelational);
   }
@@ -530,11 +519,22 @@ public class ClusterAuthorityFetcher implements IAuthorityFetcher {
     heartBeatTimeStamp = currentTime;
   }
 
-  private void checkCacheAvailable() {
-    if (cacheOutDate) {
+  // Package-private for testing (ClusterAuthorityFetcherLeaseTest).
+  void checkCacheAvailable() {
+    // cacheOutDate is set by refreshToken() only when a heartbeat finally arrives after a long gap,
+    // so it cannot catch an *ongoing* ConfigNode partition (no heartbeat arrives, refreshToken() is
+    // never called). isFenced() is evaluated on this DataNode's own clock and fires without any
+    // heartbeat: while fenced we drop the permission cache and force a re-fetch from the
+    // ConfigNode,
+    // which fails closed while partitioned, so a missed REVOKE cannot keep authorizing a privilege.
+    if (cacheOutDate || isMetadataLeaseFenced()) {
       iAuthorCache.invalidAllCache();
     }
     cacheOutDate = false;
+  }
+
+  boolean isMetadataLeaseFenced() {
+    return MetadataLeaseManager.getInstance().isFenced();
   }
 
   @TestOnly
@@ -619,7 +619,9 @@ public class ClusterAuthorityFetcher implements IAuthorityFetcher {
     }
     if (user == null && force) {
       throw new IoTDBRuntimeException(
-          "User " + userName + " does not exist", TSStatusCode.USER_NOT_EXIST.getStatusCode());
+          String.format(
+              DataNodeMiscMessages.MISC_EXCEPTION_USER_S_DOES_NOT_EXIST_0CE725D8, userName),
+          TSStatusCode.USER_NOT_EXIST.getStatusCode());
     }
     return user;
   }
@@ -717,7 +719,7 @@ public class ClusterAuthorityFetcher implements IAuthorityFetcher {
     try {
       user.loadTreePrivilegeInfo(privilegeList);
     } catch (MetadataException e) {
-      LOGGER.error("cache user's path privileges error", e);
+      LOGGER.error(DataNodeMiscMessages.CACHE_USER_PATH_PRIVILEGES_ERROR, e);
     }
     if (tPermissionInfoResp.isSetRoleInfo()) {
       for (String roleName : tPermissionInfoResp.getRoleInfo().keySet()) {
@@ -740,14 +742,14 @@ public class ClusterAuthorityFetcher implements IAuthorityFetcher {
     try {
       role.loadTreePrivilegeInfo(resp.getPrivilegeList());
     } catch (MetadataException e) {
-      LOGGER.error("cache role's path privileges error", e);
+      LOGGER.error(DataNodeMiscMessages.CACHE_ROLE_PATH_PRIVILEGES_ERROR, e);
     }
     return role;
   }
 
   private TAuthorizerReq statementToAuthorizerReq(AuthorStatement authorStatement)
       throws AuthException {
-    if (authorStatement.getAuthorType() == null) {
+    if (authorStatement.getNodeNameList() == null) {
       authorStatement.setNodeNameList(new ArrayList<>());
     }
     return new TAuthorizerReq(

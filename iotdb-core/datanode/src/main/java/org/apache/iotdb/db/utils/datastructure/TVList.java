@@ -21,6 +21,7 @@ package org.apache.iotdb.db.utils.datastructure;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.commons.utils.TestOnly;
+import org.apache.iotdb.db.i18n.DataNodeMiscMessages;
 import org.apache.iotdb.db.queryengine.execution.fragment.QueryContext;
 import org.apache.iotdb.db.queryengine.plan.statement.component.Ordering;
 import org.apache.iotdb.db.service.metrics.WritingMetrics;
@@ -297,7 +298,7 @@ public abstract class TVList implements WALEntryValue {
    */
   private int binarySearchTimestampFirstGreaterOrEqualsPosition(long time, int low, int high) {
     if (!sorted && high >= seqRowCount) {
-      throw new UnsupportedOperationException("Current TVList is not sorted");
+      throw new UnsupportedOperationException(DataNodeMiscMessages.CURRENT_TV_LIST_NOT_SORTED);
     }
     int mid;
     while (low <= high) {
@@ -346,7 +347,7 @@ public abstract class TVList implements WALEntryValue {
    */
   private int binarySearchTimestampLastLessOrEqualsPosition(long time, int low, int high) {
     if (!sorted && high >= seqRowCount) {
-      throw new UnsupportedOperationException("Current TVList is not sorted");
+      throw new UnsupportedOperationException(DataNodeMiscMessages.CURRENT_TV_LIST_NOT_SORTED);
     }
 
     int mid;
@@ -435,7 +436,7 @@ public abstract class TVList implements WALEntryValue {
    */
   public boolean isNullValue(int unsortedRowIndex) {
     if (unsortedRowIndex >= rowCount) {
-      throw new IndexOutOfBoundsException("Index out of bound error!");
+      throw new IndexOutOfBoundsException(DataNodeMiscMessages.INDEX_OUT_OF_BOUND_ERROR);
     }
     if (bitMap == null || bitMap.get(unsortedRowIndex / ARRAY_SIZE) == null) {
       return false;
@@ -1260,7 +1261,9 @@ public abstract class TVList implements WALEntryValue {
           break;
         default:
           throw new UnSupportedDataTypeException(
-              String.format("Data type %s is not supported.", dataType));
+              String.format(
+                  DataNodeMiscMessages.MISC_EXCEPTION_DATA_TYPE_S_IS_NOT_SUPPORTED_5D5C02E4,
+                  dataType));
       }
 
       // count the filtered row from time filter and other filter
@@ -1375,7 +1378,9 @@ public abstract class TVList implements WALEntryValue {
             break;
           default:
             throw new UnSupportedDataTypeException(
-                String.format("Data type %s is not supported.", dataType));
+                String.format(
+                    DataNodeMiscMessages.MISC_EXCEPTION_DATA_TYPE_S_IS_NOT_SUPPORTED_5D5C02E4,
+                    dataType));
         }
         encodeInfo.pointNumInChunk++;
         if (encodeInfo.pointNumInChunk >= encodeInfo.maxNumberOfPointsInChunk

@@ -19,16 +19,20 @@
 
 package org.apache.iotdb.db.storageengine.load.util;
 
+import org.apache.iotdb.commons.disk.FolderManager;
+import org.apache.iotdb.commons.disk.strategy.DirectoryStrategyType;
+import org.apache.iotdb.commons.exception.DiskSpaceInsufficientException;
 import org.apache.iotdb.commons.utils.RetryUtils;
+import org.apache.iotdb.db.auth.AuthorityChecker;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
-import org.apache.iotdb.db.exception.DiskSpaceInsufficientException;
+import org.apache.iotdb.db.i18n.StorageEngineMessages;
+import org.apache.iotdb.db.protocol.session.IClientSession;
+import org.apache.iotdb.db.protocol.session.SessionManager;
 import org.apache.iotdb.db.storageengine.dataregion.modification.ModificationFile;
 import org.apache.iotdb.db.storageengine.dataregion.modification.v1.ModificationFileV1;
 import org.apache.iotdb.db.storageengine.dataregion.tsfile.TsFileResource;
 import org.apache.iotdb.db.storageengine.load.active.ActiveLoadPathHelper;
 import org.apache.iotdb.db.storageengine.load.disk.ILoadDiskSelector;
-import org.apache.iotdb.db.storageengine.rescon.disk.FolderManager;
-import org.apache.iotdb.db.storageengine.rescon.disk.strategy.DirectoryStrategyType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,7 +40,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -65,7 +69,7 @@ public class LoadUtil {
         }
       }
     } catch (Exception e) {
-      LOGGER.warn("Fail to load tsfile to Active dir", e);
+      LOGGER.warn(StorageEngineMessages.FAIL_TO_LOAD_TSFILE_TO_ACTIVE_DIR, e);
       return false;
     }
 
@@ -115,16 +119,15 @@ public class LoadUtil {
       targetFilePath =
           loadDiskSelector.selectTargetDirectory(file.getParentFile(), file.getName(), false, 0);
     } catch (Exception e) {
-      LOGGER.warn("Fail to load disk space of file {}", file.getAbsolutePath(), e);
+      LOGGER.warn(StorageEngineMessages.FAIL_TO_LOAD_DISK_SPACE, file.getAbsolutePath(), e);
       return false;
     }
 
     if (targetFilePath == null) {
-      LOGGER.warn("Load active listening dir is not set.");
+      LOGGER.warn(StorageEngineMessages.LOAD_ACTIVE_LISTENING_DIR_NOT_SET);
       return false;
     }
-    final Map<String, String> attributes =
-        Objects.nonNull(loadAttributes) ? loadAttributes : Collections.emptyMap();
+    final Map<String, String> attributes = appendCurrentUserIfAbsent(loadAttributes);
     final File targetDir = ActiveLoadPathHelper.resolveTargetDir(targetFilePath, attributes);
 
     loadTsFileAsyncToTargetDir(
@@ -135,6 +138,23 @@ public class LoadUtil {
         targetDir, new File(getTsFileModsV2Path(file.getAbsolutePath())), isDeleteAfterLoad);
     loadTsFileAsyncToTargetDir(targetDir, file, isDeleteAfterLoad);
     return true;
+  }
+
+  private static Map<String, String> appendCurrentUserIfAbsent(
+      final Map<String, String> loadAttributes) {
+    final Map<String, String> attributes =
+        Objects.nonNull(loadAttributes)
+            ? new LinkedHashMap<>(loadAttributes)
+            : new LinkedHashMap<>();
+    if (!attributes.containsKey(ActiveLoadPathHelper.USER_KEY)) {
+      final IClientSession session = SessionManager.getInstance().getCurrSession();
+      attributes.put(
+          ActiveLoadPathHelper.USER_KEY,
+          session == null || session.getUsername() == null
+              ? AuthorityChecker.SUPER_USER
+              : session.getUsername());
+    }
+    return attributes;
   }
 
   public static boolean loadFilesToActiveDir(
@@ -152,16 +172,15 @@ public class LoadUtil {
       targetFilePath =
           loadDiskSelector.selectTargetDirectory(file.getParentFile(), file.getName(), false, 0);
     } catch (Exception e) {
-      LOGGER.warn("Fail to load disk space of file {}", files.get(0), e);
+      LOGGER.warn(StorageEngineMessages.FAIL_TO_LOAD_DISK_SPACE, files.get(0), e);
       return false;
     }
 
     if (targetFilePath == null) {
-      LOGGER.warn("Load active listening dir is not set.");
+      LOGGER.warn(StorageEngineMessages.LOAD_ACTIVE_LISTENING_DIR_NOT_SET);
       return false;
     }
-    final Map<String, String> attributes =
-        Objects.nonNull(loadAttributes) ? loadAttributes : Collections.emptyMap();
+    final Map<String, String> attributes = appendCurrentUserIfAbsent(loadAttributes);
     final File targetDir = ActiveLoadPathHelper.resolveTargetDir(targetFilePath, attributes);
 
     for (final String file : files) {
@@ -177,7 +196,8 @@ public class LoadUtil {
     }
     if (!targetDir.exists() && !targetDir.mkdirs()) {
       if (!targetDir.exists()) {
-        throw new IOException("Failed to create target directory " + targetDir.getAbsolutePath());
+        throw new IOException(
+            StorageEngineMessages.FAILED_TO_CREATE_TARGET_DIR + targetDir.getAbsolutePath());
       }
     }
     RetryUtils.retryOnException(
@@ -203,7 +223,7 @@ public class LoadUtil {
       // It should be noted that if this exception is not ignored, the entire process may fail to
       // start.
       exception = e;
-      LOGGER.warn("Failed to load active listening dirs", e);
+      LOGGER.warn(StorageEngineMessages.FAILED_LOAD_ACTIVE_LISTENING_DIRS, e);
     }
 
     final FolderManager finalFolderManager = folderManager;

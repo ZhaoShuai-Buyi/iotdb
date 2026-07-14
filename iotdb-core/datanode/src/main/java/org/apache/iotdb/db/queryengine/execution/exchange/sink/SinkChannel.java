@@ -24,6 +24,7 @@ import org.apache.iotdb.commons.client.IClientManager;
 import org.apache.iotdb.commons.client.sync.SyncDataNodeMPPDataExchangeServiceClient;
 import org.apache.iotdb.commons.utils.TestOnly;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
+import org.apache.iotdb.db.i18n.DataNodeQueryMessages;
 import org.apache.iotdb.db.queryengine.common.FragmentInstanceId;
 import org.apache.iotdb.db.queryengine.exception.exchange.GetTsBlockFromClosedOrAbortedChannelException;
 import org.apache.iotdb.db.queryengine.execution.exchange.MPPDataExchangeManager.SinkListener;
@@ -173,20 +174,42 @@ public class SinkChannel implements ISinkChannel {
       boolean isHighestPriority,
       IClientManager<TEndPoint, SyncDataNodeMPPDataExchangeServiceClient>
           mppDataExchangeServiceClientManager) {
-    this.remoteEndpoint = Validate.notNull(remoteEndpoint, "remoteEndPoint can not be null.");
+    this.remoteEndpoint =
+        Validate.notNull(
+            remoteEndpoint,
+            DataNodeQueryMessages.EXCEPTION_REMOTEENDPOINT_CAN_NOT_BE_NULL_DOT_83488ACF);
     this.remoteFragmentInstanceId =
-        Validate.notNull(remoteFragmentInstanceId, "remoteFragmentInstanceId can not be null.");
-    this.remotePlanNodeId = Validate.notNull(remotePlanNodeId, "remotePlanNodeId can not be null.");
-    this.localPlanNodeId = Validate.notNull(localPlanNodeId, "localPlanNodeId can not be null.");
+        Validate.notNull(
+            remoteFragmentInstanceId,
+            DataNodeQueryMessages.EXCEPTION_REMOTEFRAGMENTINSTANCEID_CAN_NOT_BE_NULL_DOT_C2449A29);
+    this.remotePlanNodeId =
+        Validate.notNull(
+            remotePlanNodeId,
+            DataNodeQueryMessages.EXCEPTION_REMOTEPLANNODEID_CAN_NOT_BE_NULL_DOT_03956DE2);
+    this.localPlanNodeId =
+        Validate.notNull(
+            localPlanNodeId,
+            DataNodeQueryMessages.EXCEPTION_LOCALPLANNODEID_CAN_NOT_BE_NULL_DOT_44A34A33);
     this.localFragmentInstanceId =
-        Validate.notNull(localFragmentInstanceId, "localFragmentInstanceId can not be null.");
+        Validate.notNull(
+            localFragmentInstanceId,
+            DataNodeQueryMessages.EXCEPTION_LOCALFRAGMENTINSTANCEID_CAN_NOT_BE_NULL_DOT_37F5917D);
     this.fullFragmentInstanceId =
         FragmentInstanceId.createFragmentInstanceIdFromTFragmentInstanceId(localFragmentInstanceId);
     this.localMemoryManager =
-        Validate.notNull(localMemoryManager, "localMemoryManager can not be null.");
-    this.executorService = Validate.notNull(executorService, "executorService can not be null.");
-    this.serde = Validate.notNull(serde, "serde can not be null.");
-    this.sinkListener = Validate.notNull(sinkListener, "sinkListener can not be null.");
+        Validate.notNull(
+            localMemoryManager,
+            DataNodeQueryMessages.EXCEPTION_LOCALMEMORYMANAGER_CAN_NOT_BE_NULL_DOT_7A46C6CE);
+    this.executorService =
+        Validate.notNull(
+            executorService,
+            DataNodeQueryMessages.EXCEPTION_EXECUTORSERVICE_CAN_NOT_BE_NULL_DOT_BC459BD4);
+    this.serde =
+        Validate.notNull(serde, DataNodeQueryMessages.EXCEPTION_SERDE_CAN_NOT_BE_NULL_DOT_D46F66E7);
+    this.sinkListener =
+        Validate.notNull(
+            sinkListener,
+            DataNodeQueryMessages.EXCEPTION_SINKLISTENER_CAN_NOT_BE_NULL_DOT_32C9E7C0);
     this.isHighestPriority = isHighestPriority;
     this.mppDataExchangeServiceClientManager = mppDataExchangeServiceClientManager;
     this.retryIntervalInMs = DEFAULT_RETRY_INTERVAL_IN_MS;
@@ -222,14 +245,14 @@ public class SinkChannel implements ISinkChannel {
   public synchronized void send(TsBlock tsBlock) {
     long startTime = System.nanoTime();
     try {
-      Validate.notNull(tsBlock, "tsBlocks is null");
+      Validate.notNull(tsBlock, DataNodeQueryMessages.EXCEPTION_TSBLOCKS_IS_NULL_02287FD8);
       if (closed) {
         // SinkChannel may have been closed by its downstream SourceHandle
         return;
       }
       checkState();
       if (!blocked.isDone()) {
-        throw new IllegalStateException("Sink handle is blocked.");
+        throw new IllegalStateException(DataNodeQueryMessages.SINK_HANDLE_IS_BLOCKED);
       }
       if (noMoreTsBlocks) {
         return;
@@ -264,7 +287,7 @@ public class SinkChannel implements ISinkChannel {
   @Override
   public synchronized void setNoMoreTsBlocks() {
     if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[StartSetNoMoreTsBlocks]");
+      LOGGER.debug(DataNodeQueryMessages.START_SET_NO_MORE_TSBLOCKS);
     }
     if (aborted || closed) {
       return;
@@ -275,7 +298,7 @@ public class SinkChannel implements ISinkChannel {
   @Override
   public synchronized boolean abort() {
     if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[StartAbortSinkChannel]");
+      LOGGER.debug(DataNodeQueryMessages.START_ABORT_SINK_CHANNEL);
     }
     if (aborted || closed) {
       return false;
@@ -297,7 +320,7 @@ public class SinkChannel implements ISinkChannel {
     sinkListener.onAborted(this);
     aborted = true;
     if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[EndAbortSinkChannel]");
+      LOGGER.debug(DataNodeQueryMessages.END_ABORT_SINK_CHANNEL);
     }
     return true;
   }
@@ -305,7 +328,7 @@ public class SinkChannel implements ISinkChannel {
   @Override
   public synchronized boolean close() {
     if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[StartCloseSinkChannel]");
+      LOGGER.debug(DataNodeQueryMessages.START_CLOSE_SINK_CHANNEL);
     }
     if (closed || aborted) {
       return false;
@@ -327,7 +350,7 @@ public class SinkChannel implements ISinkChannel {
     invokeOnFinished();
     closed = true;
     if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[EndCloseSinkChannel]");
+      LOGGER.debug(DataNodeQueryMessages.END_CLOSE_SINK_CHANNEL);
     }
     return true;
   }
@@ -375,19 +398,22 @@ public class SinkChannel implements ISinkChannel {
     if (aborted || closed) {
       if (LOGGER.isDebugEnabled()) {
         LOGGER.debug(
-            "SinkChannel still receive getting TsBlock request after being aborted={} or closed={}",
+            DataNodeQueryMessages
+                .SINKCHANNEL_STILL_RECEIVE_GETTING_TSBLOCK_REQUEST_AFTER_BEING_ABORTED_ARG_OR_CLOSED_ARG,
             aborted,
             closed);
       }
-      throw new GetTsBlockFromClosedOrAbortedChannelException("SinkChannel is aborted or closed. ");
+      throw new GetTsBlockFromClosedOrAbortedChannelException(
+          DataNodeQueryMessages.SINKCHANNEL_IS_ABORTED_OR_CLOSED);
     }
     Pair<TsBlock, Long> pair = sequenceIdToTsBlock.get(sequenceId);
     if (pair == null || pair.left == null) {
       LOGGER.warn(
-          "The TsBlock doesn't exist. Sequence ID is {}, remaining map is {}",
+          DataNodeQueryMessages.THE_TSBLOCK_DOESNT_EXIST_SEQUENCE_ID_REMAINING,
           sequenceId,
           sequenceIdToTsBlock.entrySet());
-      throw new IllegalStateException("The data block doesn't exist. Sequence ID: " + sequenceId);
+      throw new IllegalStateException(
+          DataNodeQueryMessages.THE_DATA_BLOCK_DOESN_T_EXIST_SEQUENCE_ID + sequenceId);
     }
     return serde.serialize(pair.left);
   }
@@ -413,7 +439,7 @@ public class SinkChannel implements ISinkChannel {
         bufferRetainedSizeInBytes -= entry.getValue().right;
         iterator.remove();
         if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("[ACKTsBlock] {}.", entry.getKey());
+          LOGGER.debug(DataNodeQueryMessages.ACK_TSBLOCK, entry.getKey());
         }
       }
 
@@ -456,7 +482,7 @@ public class SinkChannel implements ISinkChannel {
   @Override
   public void checkState() {
     if (aborted) {
-      throw new IllegalStateException("SinkChannel is aborted.");
+      throw new IllegalStateException(DataNodeQueryMessages.SINKCHANNEL_IS_ABORTED);
     }
   }
 
@@ -518,9 +544,10 @@ public class SinkChannel implements ISinkChannel {
     SendNewDataBlockEventTask(int startSequenceId, List<Long> blockSizes) {
       Validate.isTrue(
           startSequenceId >= 0,
-          "Start sequence ID should be greater than or equal to zero, but was: "
+          DataNodeQueryMessages
+                  .EXCEPTION_START_SEQUENCE_ID_SHOULD_BE_GREATER_THAN_OR_EQUAL_TO_ZERO_COMMA_BUT_WAS_COLON_4D2D708E
               + startSequenceId
-              + ".");
+              + DataNodeQueryMessages.EXCEPTION_DOT_9D9B854A);
       this.startSequenceId = startSequenceId;
       this.blockSizes = Validate.notNull(blockSizes);
     }
@@ -530,7 +557,7 @@ public class SinkChannel implements ISinkChannel {
       try (SetThreadName sinkChannelName = new SetThreadName(threadName)) {
         if (LOGGER.isDebugEnabled()) {
           LOGGER.debug(
-              "[NotifyNewTsBlock] [{}, {}) to {}.{}",
+              DataNodeQueryMessages.NOTIFYNEWTSBLOCK_ARG_ARG_TO_ARG_ARG,
               startSequenceId,
               startSequenceId + blockSizes.size(),
               remoteFragmentInstanceId,
@@ -552,7 +579,8 @@ public class SinkChannel implements ISinkChannel {
             client.onNewDataBlockEvent(newDataBlockEvent);
             break;
           } catch (Exception e) {
-            LOGGER.warn("Failed to send new data block event, attempt times: {}", attempt, e);
+            LOGGER.warn(
+                DataNodeQueryMessages.FAILED_TO_SEND_NEW_DATA_BLOCK_EVENT_ATTEMPT, attempt, e);
             if (attempt == MAX_ATTEMPT_TIMES) {
               sinkListener.onFailure(SinkChannel.this, e);
             }
@@ -583,7 +611,7 @@ public class SinkChannel implements ISinkChannel {
     public void run() {
       try (SetThreadName sinkChannelName = new SetThreadName(threadName)) {
         if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("[NotifyNoMoreTsBlock]");
+          LOGGER.debug(DataNodeQueryMessages.NOTIFY_NO_MORE_TSBLOCK);
         }
         int attempt = 0;
         TEndOfDataBlockEvent endOfDataBlockEvent =
@@ -599,9 +627,9 @@ public class SinkChannel implements ISinkChannel {
             client.onEndOfDataBlockEvent(endOfDataBlockEvent);
             break;
           } catch (Exception e) {
-            LOGGER.warn("Failed to send end of data block event, attempt times: {}", attempt, e);
+            LOGGER.warn(DataNodeQueryMessages.FAILED_TO_SEND_END_OF_DATA_BLOCK_EVENT, attempt, e);
             if (attempt == MAX_ATTEMPT_TIMES) {
-              LOGGER.warn("Failed to send end of data block event after all retry", e);
+              LOGGER.warn(DataNodeQueryMessages.FAILED_TO_SEND_END_OF_DATA_BLOCK_EVENT_2, e);
               sinkListener.onFailure(SinkChannel.this, e);
               return;
             }

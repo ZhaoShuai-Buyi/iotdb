@@ -19,6 +19,7 @@
 
 package org.apache.iotdb.db.pipe.sink.protocol.opcua.server;
 
+import org.apache.iotdb.db.i18n.DataNodePipeMessages;
 import org.apache.iotdb.pipe.api.exception.PipeException;
 
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
@@ -136,15 +137,15 @@ public class OpcUaServerBuilder implements Closeable {
   public OpcUaServer build() throws Exception {
     Files.createDirectories(securityDir);
     if (!Files.exists(securityDir)) {
-      throw new PipeException("Unable to create security dir: " + securityDir);
+      throw new PipeException(DataNodePipeMessages.UNABLE_CREATE_SECURITY_DIR + securityDir);
     }
 
     final File pkiDir = securityDir.resolve("pki").toFile();
 
     LoggerFactory.getLogger(OpcUaServerBuilder.class)
-        .info("Security dir: {}", securityDir.toAbsolutePath());
+        .info(DataNodePipeMessages.OPC_UA_SECURITY_DIR, securityDir.toAbsolutePath());
     LoggerFactory.getLogger(OpcUaServerBuilder.class)
-        .info("Security pki dir: {}", pkiDir.getAbsolutePath());
+        .info(DataNodePipeMessages.OPC_UA_SECURITY_PKI_DIR, pkiDir.getAbsolutePath());
 
     final OpcUaKeyStoreLoader loader =
         new OpcUaKeyStoreLoader().load(securityDir, password.toCharArray());
@@ -157,7 +158,7 @@ public class OpcUaServerBuilder implements Closeable {
     trustListManager = new DefaultTrustListManager(pkiDir);
 
     LOGGER.info(
-        "Certificate directory is: {}, Please move certificates from the reject dir to the trusted directory to allow encrypted access",
+        DataNodePipeMessages.CERTIFICATE_DIRECTORY_IS_PLEASE_MOVE_CERTIFICATES_FROM,
         pkiDir.getAbsolutePath());
 
     final KeyPair httpsKeyPair = SelfSignedCertificateGenerator.generateRsaKeyPair(2048);
@@ -186,7 +187,8 @@ public class OpcUaServerBuilder implements Closeable {
             .orElseThrow(
                 () ->
                     new UaRuntimeException(
-                        StatusCodes.Bad_ConfigurationError, "No certificate found"));
+                        StatusCodes.Bad_ConfigurationError,
+                        DataNodePipeMessages.NO_CERTIFICATE_FOUND));
 
     final String applicationUri =
         CertificateUtil.getSanUri(certificate)
@@ -194,7 +196,7 @@ public class OpcUaServerBuilder implements Closeable {
                 () ->
                     new UaRuntimeException(
                         StatusCodes.Bad_ConfigurationError,
-                        "Certificate is missing the application URI"));
+                        DataNodePipeMessages.CERTIFICATE_MISSING_APPLICATION_URI));
 
     final Set<EndpointConfiguration> endpointConfigurations =
         createEndpointConfigurations(certificate, tcpBindPort, httpsBindPort);
@@ -345,8 +347,14 @@ public class OpcUaServerBuilder implements Closeable {
       }
       throw new PipeException(
           String.format(
-              "The existing server with tcp port %s and https port %s's %s %s conflicts to the new %s %s, reject reusing.",
-              tcpBindPort, httpsBindPort, attrName, thisAttr, attrName, thatAttr));
+              DataNodePipeMessages
+                  .PIPE_EXCEPTION_THE_EXISTING_SERVER_WITH_TCP_PORT_S_AND_HTTPS_PORT_S_S_S_08C076F7,
+              tcpBindPort,
+              httpsBindPort,
+              attrName,
+              thisAttr,
+              attrName,
+              thatAttr));
     }
   }
 
@@ -356,7 +364,7 @@ public class OpcUaServerBuilder implements Closeable {
       try {
         trustListManager.close();
       } catch (final IOException e) {
-        LOGGER.warn("Failed to close trustListManager, because {}.", e.getMessage());
+        LOGGER.warn(DataNodePipeMessages.FAILED_TO_CLOSE_TRUSTLISTMANAGER_BECAUSE, e.getMessage());
       }
     }
   }

@@ -34,9 +34,11 @@ import org.apache.iotdb.db.queryengine.plan.planner.LocalExecutionPlanner;
 import org.apache.iotdb.db.queryengine.plan.relational.metadata.Metadata;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Insert;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.parser.SqlParser;
+import org.apache.iotdb.db.queryengine.plan.statement.StatementType;
 import org.apache.iotdb.db.queryengine.plan.statement.crud.InsertTabletStatement;
 import org.apache.iotdb.db.utils.CommonUtils;
 import org.apache.iotdb.db.utils.SetThreadName;
+import org.apache.iotdb.rest.protocol.handler.QueryRowLimitUtils;
 import org.apache.iotdb.rest.protocol.table.v1.NotFoundException;
 import org.apache.iotdb.rest.protocol.table.v1.RestApiService;
 import org.apache.iotdb.rest.protocol.table.v1.handler.ExceptionHandler;
@@ -49,8 +51,8 @@ import org.apache.iotdb.rest.protocol.table.v1.model.InsertTabletRequest;
 import org.apache.iotdb.rest.protocol.table.v1.model.SQL;
 import org.apache.iotdb.rpc.TSStatusCode;
 
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.SecurityContext;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.SecurityContext;
 
 import java.util.List;
 import java.util.Optional;
@@ -62,11 +64,12 @@ public class RestApiServiceImpl extends RestApiService {
 
   private static final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
 
-  private final Integer defaultQueryRowLimit;
+  private final int defaultQueryRowLimit;
 
   public RestApiServiceImpl() {
     defaultQueryRowLimit =
-        IoTDBRestServiceDescriptor.getInstance().getConfig().getRestQueryDefaultRowSizeLimit();
+        QueryRowLimitUtils.normalizeRowSizeLimit(
+            IoTDBRestServiceDescriptor.getInstance().getConfig().getRestQueryDefaultRowSizeLimit());
   }
 
   public Response executeQueryInternal(
@@ -102,7 +105,8 @@ public class RestApiServiceImpl extends RestApiService {
             QueryDataSetHandler.fillQueryDataSet(
                 queryExecution,
                 statement,
-                sql.getRowLimit() == null ? defaultQueryRowLimit : sql.getRowLimit());
+                QueryRowLimitUtils.resolveActualRowSizeLimit(
+                    sql.getRowLimit(), defaultQueryRowLimit));
         if (queryExecution.getQueryType() == QueryType.READ_WRITE) {
           return responseGenerateHelper(result);
         }
@@ -139,7 +143,7 @@ public class RestApiServiceImpl extends RestApiService {
           .ifPresent(
               s ->
                   CommonUtils.addStatementExecutionLatency(
-                      OperationType.EXECUTE_QUERY_STATEMENT, s.toString(), costTime));
+                      OperationType.EXECUTE_QUERY_STATEMENT, StatementType.QUERY.name(), costTime));
     }
   }
 
@@ -194,7 +198,6 @@ public class RestApiServiceImpl extends RestApiService {
     SqlParser relationSqlParser = new SqlParser();
     Long queryId = null;
     Statement statement = null;
-    long startTime = System.nanoTime();
     try {
       IClientSession clientSession = SESSION_MANAGER.getCurrSession();
       statement = createStatement(sql, clientSession, relationSqlParser);
@@ -233,12 +236,6 @@ public class RestApiServiceImpl extends RestApiService {
     } catch (Exception e) {
       return Response.ok().entity(ExceptionHandler.tryCatchException(e)).build();
     } finally {
-      long costTime = System.nanoTime() - startTime;
-      Optional.ofNullable(statement)
-          .ifPresent(
-              s ->
-                  CommonUtils.addStatementExecutionLatency(
-                      OperationType.EXECUTE_NON_QUERY_PLAN, s.toString(), costTime));
       if (queryId != null) {
         COORDINATOR.cleanupQueryExecution(queryId);
       }
