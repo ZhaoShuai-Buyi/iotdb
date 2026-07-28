@@ -1213,9 +1213,6 @@ public final class ProcedureMessages {
   public static final String LOG_EXCEPTION_HAPPENED_WORKER_ARG_EXECUTE_PROCEDURE_ARG_6E3AD27D = "Exception happened when worker {} execute procedure {}";
   public static final String LOG_WORKER_STUCK_ARG_ARG_RUN_TIME_ARG_MS_FB612354 = "Worker stuck {}({}), run time {} ms";
   public static final String LOG_PROCEDURE_WORKERS_ARG_RUNNING_ARG_RUNNING_STUCK_1565936D = "Procedure workers: {} is running, {} is running and stuck";
-  public static final String LOG_PROCEDUREEXECUTOR_THREADGROUP_ARG_CONTAINS_RUNNING_THREADS_WHICH_USED_NON_PROCEDURE_BD865211 =
-      "ProcedureExecutor threadGroup {} contains running threads which are used by non-procedure"
-      + " module.";
   public static final String LOG_ADD_PROCEDURE_ARG_AS_ARG_TH_ROLLBACK_STEP_C71B2184 = "Add procedure {} as the {}th rollback step";
   public static final String LOG_STATEMACHINEPROCEDURE_PID_ARG_NOT_SET_NEXT_STATE_BUT_RETURN_HAS_7F93E63F =
       "StateMachineProcedure pid={} not set next state, but return HAS_MORE_STATE. It is likely that"
@@ -1384,12 +1381,14 @@ public final class ProcedureMessages {
   public static final String LOG_MODE_ARG_SKIPPING_PIPE_CREATION_5F4D1026 = "(mode={}), skipping pipe creation";
   public static final String LOG_CREATESUBSCRIPTIONPROCEDURE_CONSENSUS_BASED_TOPICS_ARG_WILL_HANDLED_DATANODE_90A9C2FD = "CreateSubscriptionProcedure: consensus-based topics {} will be handled by DataNode ";
   public static final String LOG_VIA_CONSUMER_GROUP_META_PUSH_NO_PIPE_CREATION_NEEDED_D56CFE31 = "via consumer group meta push (no pipe creation needed)";
+  public static final String LOG_CREATESUBSCRIPTIONPROCEDURE_SYNCHRONIZING_COMMIT_PROGRESS_AFTER_CONSUMER_GROUP_NEWLY_SUBSCRIBED_CONSENSUS_TOPICS_ARG_F5687D36 = "CreateSubscriptionProcedure: synchronizing commit progress after consumer group newly subscribed consensus topics {}";
   public static final String LOG_DROPSUBSCRIPTIONPROCEDURE_TOPIC_ARG_USES_CONSENSUS_SUBSCRIPTION_MODE_6962D13C = "DropSubscriptionProcedure: topic [{}] uses consensus subscription mode ";
   public static final String LOG_MODE_ARG_SKIPPING_PIPE_REMOVAL_133B0CD6 = "(mode={}), skipping pipe removal";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_ACQUIRELOCK_SKIP_PROCEDURE_LAST_EXECUTION_TIME_ARG_CE3DD247 = "CommitProgressSyncProcedure: acquireLock, skip the procedure due to the last execution time {}";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_EXECUTEFROMVALIDATE_CF220E1F = "CommitProgressSyncProcedure: executeFromValidate";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_EXECUTEFROMOPERATEONCONFIGNODES_0DC818CA = "CommitProgressSyncProcedure: executeFromOperateOnConfigNodes";
   public static final String LOG_FAILED_PULL_COMMIT_PROGRESS_DATANODE_ARG_STATUS_ARG_33037B29 = "Failed to pull commit progress from DataNode {}, status: {}";
+  public static final String EXCEPTION_FAILED_TO_PULL_REQUIRED_COMMIT_PROGRESS_FROM_DATANODE_ARG_STATUS_ARG_E08A2450 = "Failed to pull required commit progress from DataNode %s, status: %s";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_EXECUTEFROMOPERATEONDATANODES_NO_OP_34420360 = "CommitProgressSyncProcedure: executeFromOperateOnDataNodes (no-op)";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_ROLLBACKFROMVALIDATE_2309D4D2 = "CommitProgressSyncProcedure: rollbackFromValidate";
   public static final String LOG_COMMITPROGRESSSYNCPROCEDURE_ROLLBACKFROMOPERATEONCONFIGNODES_57CB907B = "CommitProgressSyncProcedure: rollbackFromOperateOnConfigNodes";

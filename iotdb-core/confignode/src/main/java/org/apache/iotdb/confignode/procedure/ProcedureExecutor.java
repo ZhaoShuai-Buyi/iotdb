@@ -65,7 +65,8 @@ public class ProcedureExecutor<Env> {
 
   private final ConcurrentHashMap<Long, Procedure<Env>> procedures = new ConcurrentHashMap<>();
 
-  private ThreadGroup threadGroup;
+  private final ThreadGroup threadGroup =
+      new ThreadGroup(ThreadName.CONFIG_NODE_PROCEDURE_WORKER.getName());
 
   private CopyOnWriteArrayList<WorkerThread> workerThreads;
 
@@ -122,7 +123,6 @@ public class ProcedureExecutor<Env> {
   public void init(int numThreads) {
     this.corePoolSize = numThreads;
     this.maxPoolSize = 10 * numThreads;
-    this.threadGroup = new ThreadGroup(ThreadName.CONFIG_NODE_PROCEDURE_WORKER.getName());
     this.timeoutExecutor =
         new TimeoutExecutorThread<>(
             this, threadGroup, ThreadName.CONFIG_NODE_TIMEOUT_EXECUTOR.getName());
@@ -209,6 +209,14 @@ public class ProcedureExecutor<Env> {
             // executing, we need to set its state to RUNNABLE.
             procedure.setState(ProcedureState.RUNNABLE);
             runnableList.add(procedure);
+          }
+        });
+    // A submission-time deserialization failure may be persisted before a rollback stack index.
+    failedList.forEach(
+        procedure -> {
+          RootProcedureStack<Env> rootStack = rollbackStack.get(getRootProcedureId(procedure));
+          if (rootStack != null) {
+            initializeRollbackStackForFailedProcedure(rootStack, procedure);
           }
         });
     restoreLocks();
@@ -810,10 +818,30 @@ public class ProcedureExecutor<Env> {
     // Update metrics on start of a procedure
     procedure.updateMetricsOnSubmit(getEnvironment());
     RootProcedureStack<Env> stack = new RootProcedureStack<>();
+    // Persisting a newly submitted procedure may serialize and deserialize it through the
+    // consensus layer. If that process marks the procedure as failed before it is scheduled, the
+    // rollback stack still needs an entry so the executor can finish the failed procedure instead
+    // of leaving it in the active procedure map forever.
+    if (initializeRollbackStackForFailedProcedure(stack, procedure)) {
+      try {
+        store.update(procedure);
+      } catch (Exception e) {
+        LOG.error(ProcedureMessages.FAILED_TO_UPDATE_STORE_PROCEDURE, procedure, e);
+      }
+    }
     rollbackStack.put(currentProcId, stack);
     procedures.put(currentProcId, procedure);
     scheduler.addBack(procedure);
     return procedure.getProcId();
+  }
+
+  private boolean initializeRollbackStackForFailedProcedure(
+      RootProcedureStack<Env> stack, Procedure<Env> procedure) {
+    if (procedure.isFailed() && !procedure.wasExecuted()) {
+      stack.addRollbackStep(procedure);
+      return true;
+    }
+    return false;
   }
 
   private class WorkerThread extends StoppableThread {
@@ -1023,15 +1051,6 @@ public class ProcedureExecutor<Env> {
     workerMonitorExecutor.awaitTermination();
     for (WorkerThread workerThread : workerThreads) {
       workerThread.awaitTermination();
-    }
-    try {
-      threadGroup.destroy();
-    } catch (IllegalThreadStateException e) {
-      LOG.warn(
-          ProcedureMessages
-              .LOG_PROCEDUREEXECUTOR_THREADGROUP_ARG_CONTAINS_RUNNING_THREADS_WHICH_USED_NON_PROCEDURE_BD865211,
-          this.threadGroup);
-      this.threadGroup.list();
     }
   }
 
